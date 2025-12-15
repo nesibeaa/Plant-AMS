@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>AgriSmart – Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <a href="./stats.html" class="pill">İstatistikler →</a>
+
+  <style>
+    :root {
+      --bg:#0b1220; --card:#121a2b; --muted:#93a3b8; --text:#e7eefb; --line:#1f2b44;
+      --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --pill:#1d2a44;
+      --btn:#18243b; --btn-border:#2a3a5d; --btn-hover:#223253; --accent:#60a5fa;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial}
+    html{overflow-anchor:none}
+    .wrap{max-width:1100px;margin:28px auto;padding:0 16px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+    h1{font-size:24px;margin:0;font-weight:700;letter-spacing:.2px}
+    .pill{background:var(--pill);border:1px solid var(--line);padding:6px 10px;border-radius:999px;font-size:12px;color:var(--muted)}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    button{appearance:none;border:1px solid var(--btn-border);background:var(--btn);color:var(--text);padding:8px 12px;border-radius:10px;cursor:pointer}
+    button:hover{background:var(--btn-hover)}
+    .grid{display:grid;gap:16px;grid-template-columns:repeat(12,1fr)}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+    .span-4{grid-column:span 4} .span-8{grid-column:span 8} .span-12{grid-column:span 12}
+    @media (max-width:980px){.span-4,.span-8,.span-12{grid-column:span 12}}
+    .sub{font-size:12px;color:var(--muted)} .mini{font-size:12px;color:var(--muted)}
+    .kpi{display:flex;align-items:center;justify-content:space-between}
+    .value{font-size:28px;font-weight:700;margin-top:2px}
+    .badge{padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid var(--line)}
+    .ok{color:var(--ok);border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.12)}
+    .warn{color:var(--warn);border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.12)}
+    .bad{color:var(--bad);border-color:rgba(239,68,68,.35);background:rgba(239,68,68,.12)}
+    code{background:#0e172a;border:1px solid #263454;padding:2px 6px;border-radius:6px;color:#cbd5e1}
+    table{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px}
+    th,td{border-bottom:1px solid var(--line);padding:10px 6px;text-align:left}
+    .toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between}
+    .legend{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted)}
+    .dot{width:10px;height:10px;border-radius:50%}
+    /* canlı akış (navbar altı) */
+    .stream{max-height:120px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:8px;background:#0e172a}
+    .stream pre{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;line-height:1.35}
+    .line-muted{color:#9fb0cc}
+    /* alerts sabit yükseklik */
+    .alerts-scroll{max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+    /* grafik kartları sabit */
+    .chart-card{height:320px;display:flex;flex-direction:column}
+    .chart-wrap{position:relative;height:230px}
+    .chart-wrap canvas{position:absolute;inset:0}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>AgriSmart • Dashboard</h1>
+      <div class="row">
+        <button id="autoBtn" onclick="toggleAuto()">Auto: Açık</button>
+        <button onclick="refreshNow()">Şimdi yenile</button>
+        <span class="pill">Backend: <b id="health">—</b></span>
+        <span class="pill">Son güncelleme: <b id="lastUpdate">—</b></span>
+      </div>
+    </header>
+
+    <!-- Canlı Akış (navbar altı) -->
+    <div class="card span-12" style="margin-bottom:14px">
+      <div class="toolbar">
+        <div>
+          <div style="font-weight:600">Canlı Akış</div>
+          <div class="mini">Gelen tüm veriler (maks 200 satır)</div>
+        </div>
+        <div class="row">
+          <button onclick="clearStream()">Temizle</button>
+        </div>
+      </div>
+      <div id="streamBox" class="stream"><pre id="stream"></pre></div>
+    </div>
+
+    <!-- KPI + Fan -->
+    <div class="grid" style="margin-bottom:6px">
+      <div class="card span-4">
+        <div class="kpi">
+          <div><div class="sub">Sıcaklık</div><div class="value" id="kpi_temp">—</div><div class="mini">sensor: <code>temp-1</code></div></div>
+          <span id="kpi_temp_badge" class="badge">—</span>
+        </div>
+      </div>
+      <div class="card span-4">
+        <div class="kpi">
+          <div><div class="sub">Nem</div><div class="value" id="kpi_hum">—</div><div class="mini">sensor: <code>hum-1</code></div></div>
+          <span id="kpi_hum_badge" class="badge">—</span>
+        </div>
+      </div>
+      <div class="card span-4">
+        <div class="kpi">
+          <div><div class="sub">CO₂</div><div class="value" id="kpi_co2">—</div><div class="mini">sensor: <code>co2-1</code></div></div>
+          <span id="kpi_co2_badge" class="badge">—</span>
+        </div>
+      </div>
+
+      <!-- Fan -->
+      <div class="card span-4">
+        <div class="toolbar">
+          <div><div style="font-weight:600">Fan</div><div class="mini">Durum & Mod</div></div>
+          <div class="row">
+            <button onclick="setFan('on')">ON</button>
+            <button onclick="setFan('off')">OFF</button>
+            <button onclick="setFan('auto')">AUTO</button>
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px; gap:16px">
+          <div>Mode: <b id="fan_mode">—</b></div>
+          <div>State: <b id="fan_state">—</b></div>
+          <div class="mini">Last: <span id="fan_last">—</span></div>
+        </div>
+      </div>
+
+      <!-- ÜÇ AYRI GRAFİK -->
+      <div class="card span-4 chart-card">
+        <div class="toolbar"><div><div style="font-weight:600">Sıcaklık</div><div class="mini">Son 100</div></div></div>
+        <div class="chart-wrap"><canvas id="chartTemp"></canvas></div>
+      </div>
+      <div class="card span-4 chart-card">
+        <div class="toolbar"><div><div style="font-weight:600">Nem</div><div class="mini">Son 100</div></div></div>
+        <div class="chart-wrap"><canvas id="chartHum"></canvas></div>
+      </div>
+      <div class="card span-4 chart-card">
+        <div class="toolbar"><div><div style="font-weight:600">CO₂</div><div class="mini">Son 100</div></div></div>
+        <div class="chart-wrap"><canvas id="chartCO2"></canvas></div>
+      </div>
+
+      <!-- Alerts -->
+      <div class="card span-12">
+        <div class="toolbar">
+          <div><div style="font-weight:600">Uyarılar</div><div class="mini">Son 100 kayıt</div></div>
+          <button onclick="loadAlerts()">Yenile</button>
+        </div>
+        <div class="alerts-scroll">
+          <table>
+            <thead><tr><th>Seviye</th><th>Kaynak</th><th>Mesaj</th><th>Zaman</th></tr></thead>
+            <tbody id="alerts_tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const BASE = "http://127.0.0.1:8000";
+    // anti-cache
+    const NOCACHE = { cache: 'no-store' };
+    const bust = () => `_=${Date.now()}`;
+  
+    // Auto refresh
+    let REFRESH_MS = 10000, timer=null, tickCount=0;
+    function startAuto(){ if(timer) return; timer=setInterval(tick, REFRESH_MS); document.getElementById('autoBtn').textContent='Auto: Açık'; }
+    function stopAuto(){ if(!timer) return; clearInterval(timer); timer=null; document.getElementById('autoBtn').textContent='Auto: Kapalı'; }
+    function toggleAuto(){ timer?stopAuto():startAuto(); }
+    document.addEventListener('visibilitychange', ()=>{ if(document.hidden) stopAuto(); else { tick(); startAuto(); } });
+  
+    // Eşikler (UI)
+    const TH = { temp:{min:18,max:24}, humidity:{min:85,max:95}, co2:{max:1500} };
+    const fmt = n => (n==null ? "—" : (typeof n === "number" ? n.toFixed(2) : n));
+    const ts  = s => s ? new Date(s).toLocaleTimeString() : "—";
+    function badge(el, ok, warn=false){ el.className="badge "+(ok?"ok":(warn?"warn":"bad")); el.textContent = ok?"normal":(warn?"attention":"out of range"); }
+    function inRange(type,val){ if(type==='temp'||type==='humidity') return val>=TH[type].min && val<=TH[type].max; if(type==='co2') return val<=TH.co2.max; return true; }
+    function setLastUpdate(){ document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString(); }
+  
+    // Health
+    async function health(){
+      try{ const r = await fetch(`${BASE}/api/v1/health?${bust()}`, NOCACHE); document.getElementById("health").textContent = r.ok?"up":"down"; }
+      catch{ document.getElementById("health").textContent = "down"; }
+    }
+  
+    // Fan
+    async function getFan(){
+      const r = await fetch(`${BASE}/api/v1/actuator/fan?${bust()}`, NOCACHE);
+      const f = await r.json();
+      document.getElementById('fan_mode').textContent = f.mode;
+      document.getElementById('fan_state').textContent = f.state;
+      document.getElementById('fan_last').textContent = f.last_change ? new Date(f.last_change).toLocaleString() : "—";
+    }
+    async function setFan(action){
+      await fetch(`${BASE}/api/v1/control/fan?${bust()}`, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(action), ...NOCACHE });
+      getFan();
+    }
+  
+    // KPIs
+    async function latest(sensor_id){
+      const r = await fetch(`${BASE}/api/v1/readings?sensor_id=${sensor_id}&limit=1&${bust()}`, NOCACHE);
+      const a = await r.json(); return a.length?a[0]:null;
+    }
+    async function loadKPIs(){
+      const t = await latest("temp-1"), h = await latest("hum-1"), c = await latest("co2-1");
+      document.getElementById("kpi_temp").textContent = t? `${fmt(t.value)} °C`:"—";
+      document.getElementById("kpi_hum").textContent  = h? `${fmt(h.value)} %` :"—";
+      document.getElementById("kpi_co2").textContent  = c? `${fmt(c.value)}`    :"—";
+      if(t) badge(document.getElementById("kpi_temp_badge"), inRange("temp",t.value));
+      if(h) badge(document.getElementById("kpi_hum_badge"),  inRange("humidity",h.value));
+      if(c) badge(document.getElementById("kpi_co2_badge"),  inRange("co2",c.value), c.value>TH.co2.max*0.95 && c.value<=TH.co2.max);
+    }
+  
+    // Uyarılar
+    async function loadAlerts(){
+      const r = await fetch(`${BASE}/api/v1/alerts?limit=100&${bust()}`, NOCACHE);
+      const arr = (await r.json()).slice(0,100);
+      const tb = document.getElementById("alerts_tbody");
+      tb.innerHTML = "";
+      arr.forEach(a=>{
+        const tr = document.createElement("tr");
+        const lvl = `<span class="badge ${a.level==='warn'?'warn':'ok'}">${a.level}</span>`;
+        tr.innerHTML = `<td>${lvl}</td><td><code>${a.source}</code></td><td>${a.message}</td><td class="mini">${new Date(a.ts).toLocaleString()}</td>`;
+        tb.appendChild(tr);
+      });
+    }
+  
+    // ======== CANLI AKIŞ ========
+    let lastId = 0;
+    const streamEl = document.getElementById('stream');
+    const streamBox = document.getElementById('streamBox');
+    function pushLine(line, muted=false){
+      const span = document.createElement('span');
+      span.className = muted ? 'line-muted' : '';
+      span.textContent = line + "\n";
+      streamEl.appendChild(span);
+      streamBox.scrollTop = 0;
+      const maxChars = 2000*60; if(streamEl.textContent.length > maxChars){ streamEl.textContent = streamEl.textContent.slice(-maxChars); }
+    }
+    function clearStream(){ streamEl.textContent=""; lastId = 0; }
+  
+    async function loadStream(){
+      const r = await fetch(`${BASE}/api/v1/readings?limit=120&${bust()}`, NOCACHE);
+      const arr = await r.json();               // DESC geliyor
+      const chron = arr.reverse();              // kronolojik
+      const fresh = lastId ? chron.filter(x=>x.id > lastId) : chron;
+      fresh.forEach(x=>{
+        const t = new Date(x.ts).toLocaleTimeString();
+        pushLine(`[${t}] ${x.sensor_id}  ${x.type.padEnd(8)}  ${fmt(x.value)}`);
+        if(x.id>lastId) lastId = x.id;
+      });
+      if(!lastId && chron.length){
+        lastId = chron[chron.length-1].id;
+        pushLine("Akış başlatıldı… En yeni kayıt id=" + lastId, true);
+      }
+    }
+  
+    // ======== ÜÇ AYRI GRAFİK (eşik üstü kırmızı) ========
+    function makeChart(ctx, label){
+      return new Chart(ctx, {
+        type: 'line',
+        data: { labels: [], datasets: [{
+          label,
+          data: [],
+          borderWidth: 2,
+          tension: 0.35,
+          pointRadius: 3,
+          borderColor: '#60a5fa',
+          pointBackgroundColor: [],
+          segment: { borderColor: () => '#60a5fa' }
+        }]},
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { ticks:{ color:'#9fb0cc' }, grid:{ color:'#22314f' } },
+            y: { ticks:{ color:'#9fb0cc' }, grid:{ color:'#22314f' } }
+          },
+          plugins: { legend:{ display:false }, tooltip:{ mode:'index', intersect:false } }
+        }
+      });
+    }
+  
+    function paintSeries(chart, items, kind){
+      if (!items.length){
+        chart.data.labels = [];
+        chart.data.datasets[0].data = [];
+        chart.update();
+        return;
+      }
+      const labels = items.map(x => new Date(x.ts).toLocaleTimeString());
+      const vals   = items.map(x => x.value);
+      const pts = items.map(x=>{
+        if (kind==='temp')     return (x.value>TH.temp.max || x.value<TH.temp.min) ? '#ef4444' : '#ffffff';
+        if (kind==='humidity') return (x.value>TH.humidity.max || x.value<TH.humidity.min) ? '#ef4444' : '#ffffff';
+        if (kind==='co2')      return (x.value>TH.co2.max) ? '#ef4444' : '#ffffff';
+        return '#ffffff';
+      });
+      chart.data.labels = labels;
+      const ds = chart.data.datasets[0];
+      ds.data = vals;
+      ds.pointBackgroundColor = pts;
+      ds.segment = {
+        borderColor: ctx => {
+          const i = ctx.p0DataIndex ?? 0;
+          const v = vals[i+1] ?? vals[i];
+          if (kind==='temp'     && (v>TH.temp.max || v<TH.temp.min)) return '#ef4444';
+          if (kind==='humidity' && (v>TH.humidity.max || v<TH.humidity.min)) return '#ef4444';
+          if (kind==='co2'      && (v>TH.co2.max)) return '#ef4444';
+          return '#60a5fa';
+        }
+      };
+      const min = Math.min(...vals), max = Math.max(...vals);
+      const pad = kind==='co2' ? 50 : 0.5;
+      chart.options.scales.y.suggestedMin = Math.floor(min - pad);
+      chart.options.scales.y.suggestedMax = Math.ceil(max + pad);
+      chart.update();
+    }
+  
+    // 🔹 GRAFİK NESNELERİNİ OLUŞTUR (eksik olan kısım)
+    const chartTemp = makeChart(document.getElementById('chartTemp').getContext('2d'), 'temp');
+    const chartHum  = makeChart(document.getElementById('chartHum').getContext('2d'),  'humidity');
+    const chartCO2  = makeChart(document.getElementById('chartCO2').getContext('2d'),  'co2');
+  
+    async function loadCharts(){
+      const r = await fetch(`${BASE}/api/v1/readings?limit=100&${bust()}`, NOCACHE);
+      const arr = (await r.json()).reverse(); // kronolojik
+      paintSeries(chartTemp, arr.filter(x=>x.type==='temp').slice(-100), 'temp');
+      paintSeries(chartHum,  arr.filter(x=>x.type==='humidity').slice(-100), 'humidity');
+      paintSeries(chartCO2,  arr.filter(x=>x.type==='co2').slice(-100), 'co2');
+    }
+  
+    // Tick
+    async function tick(){
+      tickCount++;
+      await health();
+      await getFan();
+      await loadKPIs();
+      await loadStream();
+      if (tickCount % 2 === 0) await loadAlerts(); // ~20 sn
+      if (tickCount % 3 === 0) await loadCharts(); // ~30 sn
+      setLastUpdate();
+    }
+    async function refreshNow(){
+      await health(); await getFan(); await loadKPIs();
+      await loadStream(); await loadAlerts(); await loadCharts();
+      setLastUpdate();
+    }
+  
+    // İlk yükleme
+    (async ()=>{ await refreshNow(); startAuto(); })();
+  </script>
+  
+</body>
+</html>

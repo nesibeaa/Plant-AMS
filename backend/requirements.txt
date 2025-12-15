@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sqlmodel
+pydantic
+Pillow
+numpy
+python-multipart
+torch
+timm

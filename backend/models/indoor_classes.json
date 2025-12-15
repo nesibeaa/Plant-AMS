@@ -1,0 +1,21 @@
+{
+  "classes": [
+    "Aloe_Anthracnose",
+    "Aloe_Healthy",
+    "Aloe_LeafSpot",
+    "Aloe_Rust",
+    "Aloe_Sunburn",
+    "Cactus_Dactylopius_Opuntia",
+    "Cactus_Healthy",
+    "Money_Plant_Bacterial_wilt_disease",
+    "Money_Plant_Healthy",
+    "Money_Plant_Manganese_Toxicity",
+    "Snake_Plant_Anthracnose",
+    "Snake_Plant_Healthy",
+    "Snake_Plant_Leaf_Withering",
+    "Spider_Plant_Fungal_leaf_spot",
+    "Spider_Plant_Healthy",
+    "Spider_Plant_Leaf_Tip_Necrosis"
+  ]
+}
+

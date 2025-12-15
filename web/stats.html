@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>AgriSmart – İstatistikler</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    :root { --bg:#0b1220; --card:#121a2b; --muted:#93a3b8; --text:#e7eefb; --line:#1f2b44; --pill:#1d2a44; }
+    *{box-sizing:border-box} html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial}
+    .wrap{max-width:1100px;margin:28px auto;padding:0 16px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+    a{color:#9ec1ff;text-decoration:none} a:hover{text-decoration:underline}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.25); margin-bottom:16px}
+    .grid{display:grid;gap:16px;grid-template-columns:repeat(12,1fr)}
+    .span-6{grid-column:span 6} .span-12{grid-column:span 12}
+    @media (max-width:980px){.span-6,.span-12{grid-column:span 12}}
+    .toolbar{display:flex;align-items:center;justify-content:space-between}
+    .mini{font-size:12px;color:var(--muted)}
+    table{width:100%;border-collapse:collapse;font-size:14px}
+    th,td{border-bottom:1px solid var(--line);padding:10px 6px;text-align:left}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>AgriSmart • İstatistikler</h1>
+      <div>
+        <a href="./index.html">← Dashboard</a>
+      </div>
+    </header>
+
+    <div class="grid">
+      <div class="card span-6">
+        <div class="toolbar">
+          <div><b>Günlük Ortalama (Son 7 Gün)</b><div class="mini">Sıcaklık / Nem / CO₂</div></div>
+          <div class="mini" id="dailyInfo">—</div>
+        </div>
+        <canvas id="dailyChart" height="160"></canvas>
+      </div>
+      <div class="card span-6">
+        <div class="toolbar">
+          <div><b>Saatlik Ortalama (Son 24 Saat)</b><div class="mini">Sıcaklık / Nem / CO₂</div></div>
+          <div class="mini" id="hourlyInfo">—</div>
+        </div>
+        <canvas id="hourlyChart" height="160"></canvas>
+      </div>
+
+      <div class="card span-12">
+        <div class="toolbar">
+          <div><b>Fan Geçmişi</b><div class="mini">Son 100 kayıt</div></div>
+          <button onclick="loadFan()">Yenile</button>
+        </div>
+        <table>
+          <thead><tr><th>Zaman</th><th>Eylem</th><th>Neden</th><th>Mode</th><th>State</th></tr></thead>
+          <tbody id="fanTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const BASE = "http://127.0.0.1:8000";
+    const NOCACHE = { cache: 'no-store' };
+    const bust = () => `_=${Date.now()}`;
+  
+    function mkChart(ctx){
+      return new Chart(ctx, {
+        type:'line',
+        data:{ labels:[], datasets:[
+          {label:'temp',     data:[], borderWidth:2, tension:.35},
+          {label:'humidity', data:[], borderWidth:2, tension:.35},
+          {label:'co2',      data:[], borderWidth:2, tension:.35},
+        ]},
+        options:{
+          responsive:true, maintainAspectRatio:false,
+          scales:{ x:{ticks:{color:'#9fb0cc'}, grid:{color:'#22314f'}},
+                   y:{ticks:{color:'#9fb0cc'}, grid:{color:'#22314f'}}},
+          plugins:{ legend:{labels:{color:'#cfe1ff'}}, tooltip:{mode:'index',intersect:false} }
+        }
+      });
+    }
+  
+    const dailyChart  = mkChart(document.getElementById('dailyChart').getContext('2d'));
+    const hourlyChart = mkChart(document.getElementById('hourlyChart').getContext('2d'));
+  
+    async function fetchSeries(sensor, bucket, span){
+      const url = bucket==='daily'
+        ? `${BASE}/api/v1/stats/series?sensor=${sensor}&bucket=daily&days=${span}&${bust()}`
+        : `${BASE}/api/v1/stats/series?sensor=${sensor}&bucket=hourly&hours=${span}&${bust()}`;
+      const r = await fetch(url, NOCACHE);
+      if (!r.ok) throw new Error(`${bucket} ${sensor} HTTP ${r.status}`);
+      return r.json();
+    }
+  
+    async function loadDaily(){
+      try{
+        const [t, h, c] = await Promise.all([
+          fetchSeries('temp','daily',7),
+          fetchSeries('humidity','daily',7),
+          fetchSeries('co2','daily',7),
+        ]);
+        const labels = [...new Set([...t,...h,...c].map(x=>x.bucket))].sort();
+        dailyChart.data.labels = labels;
+        const map = (arr)=> labels.map(b=> (arr.find(x=>x.bucket===b)?.avg ?? null));
+        dailyChart.data.datasets[0].data = map(t);
+        dailyChart.data.datasets[1].data = map(h);
+        dailyChart.data.datasets[2].data = map(c);
+        dailyChart.update();
+        document.getElementById('dailyInfo').textContent = labels[0] ? `${labels[0]} → ${labels[labels.length-1]}` : '—';
+      }catch(err){
+        console.error(err);
+        document.getElementById('dailyInfo').textContent = 'Veri alınamadı';
+      }
+    }
+  
+    async function loadHourly(){
+      try{
+        const [t, h, c] = await Promise.all([
+          fetchSeries('temp','hourly',24),
+          fetchSeries('humidity','hourly',24),
+          fetchSeries('co2','hourly',24),
+        ]);
+        const labels = [...new Set([...t,...h,...c].map(x=>x.bucket))].sort();
+        hourlyChart.data.labels = labels;
+        const map = (arr)=> labels.map(b=> (arr.find(x=>x.bucket===b)?.avg ?? null));
+        hourlyChart.data.datasets[0].data = map(t);
+        hourlyChart.data.datasets[1].data = map(h);
+        hourlyChart.data.datasets[2].data = map(c);
+        hourlyChart.update();
+        document.getElementById('hourlyInfo').textContent = labels[0] ? `${labels[0]} → ${labels[labels.length-1]}` : '—';
+      }catch(err){
+        console.error(err);
+        document.getElementById('hourlyInfo').textContent = 'Veri alınamadı';
+      }
+    }
+  
+    async function loadFan(){
+      try{
+        const r = await fetch(`${BASE}/api/v1/fan/history?limit=100&${bust()}`, NOCACHE);
+        if (!r.ok) throw new Error(`fan history HTTP ${r.status}`);
+        const arr = await r.json();
+        const tb = document.getElementById('fanTbody');
+        tb.innerHTML = '';
+        arr.forEach(x=>{
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${new Date(x.ts).toLocaleString()}</td>
+            <td>${x.action}</td>
+            <td>${x.reason}</td>
+            <td>${x.mode}</td>
+            <td>${x.state}</td>
+          `;
+          tb.appendChild(tr);
+        });
+      }catch(err){
+        console.error(err);
+        const tb = document.getElementById('fanTbody');
+        tb.innerHTML = '<tr><td colspan="5">Fan geçmişi alınamadı</td></tr>';
+      }
+    }
+  
+    (async ()=>{
+      await loadDaily();
+      await loadHourly();
+      await loadFan();
+    })();
+  </script>
+</body>
+</html>
