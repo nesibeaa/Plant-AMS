@@ -1,0 +1,92 @@
+PLANTVILLAGE MODEL İÇERİĞİ
+============================
+
+Notebook çıktısına göre:
+- Plant species: 14
+- Health statuses: 21
+
+Dataset klasörlerinden çıkarılan bilgiler:
+
+BİTKİ TÜRLERİ (14):
+1. Apple
+2. Blueberry
+3. Cherry (including sour)
+4. Corn (maize)
+5. Grape
+6. Orange
+7. Peach
+8. Pepper, bell
+9. Potato
+10. Raspberry
+11. Soybean
+12. Squash
+13. Strawberry
+14. Tomato
+
+SAĞLIK DURUMLARI (21):
+1. healthy (her bitki için)
+2. Apple_scab
+3. Black_rot
+4. Cedar_apple_rust
+5. Powdery_mildew
+6. Cercospora_leaf_spot Gray_leaf_spot
+7. Common_rust
+8. Northern_Leaf_Blight
+9. Esca_(Black_Measles)
+10. Leaf_blight_(Isariopsis_Leaf_Spot)
+11. Haunglongbing_(Citrus_greening)
+12. Bacterial_spot
+13. Early_blight
+14. Late_blight
+15. Leaf_Mold
+16. Septoria_leaf_spot
+17. Spider_mites Two-spotted_spider_mite
+18. Target_Spot
+19. Tomato_mosaic_virus
+20. Tomato_Yellow_Leaf_Curl_Virus
+21. Leaf_scorch
+
+HASTALIK KATEGORİLERİ:
+
+Blight (Yanıklık):
+- Early_blight
+- Late_blight
+- Northern_Leaf_Blight
+
+Rot (Çürüklük):
+- Black_rot
+
+Spot (Leke):
+- Bacterial_spot
+- Cercospora_leaf_spot
+- Septoria_leaf_spot
+- Target_Spot
+- Isariopsis_Leaf_Spot
+
+Rust (Pas):
+- Cedar_apple_rust
+- Common_rust
+
+Mildew (Küf):
+- Powdery_mildew
+
+Mold (Küf):
+- Leaf_Mold
+
+Bacterial (Bakteriyel):
+- Bacterial_spot
+
+Virus (Viral):
+- Tomato_mosaic_virus
+- Tomato_Yellow_Leaf_Curl_Virus
+
+Pest (Zararlı):
+- Spider_mites
+
+Scorch (Yanma):
+- Leaf_scorch
+
+Diğer:
+- Esca_(Black_Measles)
+- Haunglongbing_(Citrus_greening)
+

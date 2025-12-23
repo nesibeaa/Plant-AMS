@@ -1,8 +1,9 @@
 # backend/main.py
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, field_validator
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel, field_validator, EmailStr
 from typing import Optional, Deque, Dict, List, Literal, Any
 from pathlib import Path
 from collections import deque
@@ -11,10 +12,22 @@ from datetime import timedelta
 from sqlalchemy import text as sqltext
 from sqlalchemy import func, event
 import io
+import os
+import secrets
 from PIL import Image
 import numpy as np
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+import bcrypt
+from dotenv import load_dotenv
+from pathlib import Path
+
+# .env dosyasını yükle (backend dizininden)
+env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 from .plant_classifier import PlantClassifier
+from .plantvillage_classifier import PlantVillageClassifier
 
 
 from sqlmodel import SQLModel, Field, create_engine, Session, select
@@ -125,9 +138,110 @@ class AlertDB(SQLModel, table=True):
     message: str
     ts: datetime  # timezone-aware datetime yazacağız
 
+class UserDB(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    email: str = Field(unique=True, index=True)
+    username: str = Field(unique=True, index=True)
+    hashed_password: str
+    full_name: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    is_active: bool = True
+
 @app.on_event("startup")
 def on_startup():
     SQLModel.metadata.create_all(engine)
+
+# ----------------- AUTHENTICATION -------------------------------------------
+# SECRET_KEY environment variable'dan al, yoksa güvenli bir key oluştur (sadece development için)
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    # Development modunda: otomatik güvenli key oluştur (her restart'ta değişir)
+    # Production'da MUTLAKA environment variable kullan!
+    SECRET_KEY = secrets.token_urlsafe(32)
+    print("⚠️  WARNING: SECRET_KEY environment variable bulunamadı!")
+    print("⚠️  Development modunda otomatik key oluşturuldu (her restart'ta değişir)")
+    print("⚠️  Production için: export SECRET_KEY='your-secret-key-here'")
+    
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 gün
+
+security = HTTPBearer()
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Şifreyi doğrula - bcrypt direkt kullan"""
+    try:
+        # Bcrypt 72 byte limit - şifreyi encode et ve sınırla
+        password_bytes = plain_password.encode('utf-8')
+        if len(password_bytes) > 72:
+            password_bytes = password_bytes[:72]
+            plain_password = password_bytes.decode('utf-8', errors='ignore')
+        
+        # Bcrypt hash'i bytes'a çevir
+        if isinstance(hashed_password, str):
+            hashed_password_bytes = hashed_password.encode('utf-8')
+        else:
+            hashed_password_bytes = hashed_password
+            
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password_bytes)
+    except Exception:
+        return False
+
+def get_password_hash(password: str) -> str:
+    """Şifreyi hash'le - bcrypt direkt kullan"""
+    # Bcrypt 72 byte limit kontrolü
+    password_bytes = password.encode('utf-8')
+    if len(password_bytes) > 72:
+        raise ValueError("Şifre çok uzun (maksimum 72 karakter)")
+    
+    # Bcrypt ile hash'le (12 rounds)
+    salt = bcrypt.gensalt(rounds=12)
+    hashed = bcrypt.hashpw(password_bytes, salt)
+    return hashed.decode('utf-8')
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = utcnow() + expires_delta
+    else:
+        expire = utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> UserDB:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id_str = payload.get("sub")
+        if user_id_str is None:
+            raise credentials_exception
+        # JWT'den gelen string'i integer'a çevir
+        try:
+            user_id: int = int(user_id_str)
+        except (ValueError, TypeError):
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    with Session(engine) as s:
+        user = s.get(UserDB, user_id)
+        if user is None:
+            raise credentials_exception
+        return user
+
+async def get_current_active_user(
+    current_user: UserDB = Depends(get_current_user)
+) -> UserDB:
+    if not current_user.is_active:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    return current_user
 
 # ----------------- In-memory (demo) -----------------------------------------
 READINGS: Deque[dict] = deque(maxlen=5000)
@@ -139,7 +253,7 @@ THRESHOLDS = {
     "humidity": {"min": 45.0, "max": 80.0},
     "co2":      {"max": 1200.0},
 }
-LOW_CONFIDENCE_THRESHOLD = 0.6
+LOW_CONFIDENCE_THRESHOLD = 0.5  # Düşük güven skorları için daha hassas uyarı
 
 CLASS_INFO: Dict[str, Dict[str, Any]] = {
     # Money Plant
@@ -249,10 +363,12 @@ INDOOR_WEIGHTS = MODELS_DIR / "indoor_classifier.pt"
 INDOOR_CLASSES = MODELS_DIR / "indoor_classes.json"
 OUTDOOR_WEIGHTS = MODELS_DIR / "outdoor_classifier.pt"
 OUTDOOR_CLASSES = MODELS_DIR / "outdoor_classes.json"
+PLANTVILLAGE_WEIGHTS = MODELS_DIR / "plantvillage_multi.pt"
 
-MODEL_REGISTRY: Dict[str, PlantClassifier] = {
-    "indoor": PlantClassifier(INDOOR_WEIGHTS, INDOOR_CLASSES),
+MODEL_REGISTRY: Dict[str, Any] = {
+    # "indoor": PlantClassifier(INDOOR_WEIGHTS, INDOOR_CLASSES),  # Kaldırıldı
     "outdoor": PlantClassifier(OUTDOOR_WEIGHTS, OUTDOOR_CLASSES),
+    "plantvillage": PlantVillageClassifier(PLANTVILLAGE_WEIGHTS),
 }
 
 
@@ -309,6 +425,46 @@ class ReadingIn(BaseModel):
         if v not in {"temp", "humidity", "co2"}:
             raise ValueError("type must be one of: temp, humidity, co2")
         return v
+
+class UserRegister(BaseModel):
+    email: EmailStr
+    username: str
+    password: str
+    full_name: Optional[str] = None
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str):
+        if len(v) < 6:
+            raise ValueError("Şifre en az 6 karakter olmalıdır")
+        if len(v.encode('utf-8')) > 72:
+            raise ValueError("Şifre çok uzun (maksimum 72 karakter)")
+        return v
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str):
+        if len(v) < 3:
+            raise ValueError("Kullanıcı adı en az 3 karakter olmalıdır")
+        if len(v) > 50:
+            raise ValueError("Kullanıcı adı çok uzun (maksimum 50 karakter)")
+        return v
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: dict
+
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    username: str
+    full_name: Optional[str] = None
+    created_at: datetime
 
 # ----------------- Endpoints -------------------------------------------------
 
@@ -375,6 +531,118 @@ def stats_series(
 @app.get("/api/v1/health")
 def health():
     return {"status": "ok"}
+
+# ----------------- AUTH ENDPOINTS -------------------------------------------
+@app.post("/api/v1/auth/register", response_model=Token)
+def register(user_data: UserRegister):
+    """Kullanıcı kaydı"""
+    with Session(engine) as s:
+        # Email kontrolü
+        existing_email = s.exec(select(UserDB).where(UserDB.email == user_data.email)).first()
+        if existing_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+        
+        # Username kontrolü
+        existing_username = s.exec(select(UserDB).where(UserDB.username == user_data.username)).first()
+        if existing_username:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username already taken"
+            )
+        
+        # Şifre hash'leme (validation zaten yapıldı)
+        try:
+            hashed_password = get_password_hash(user_data.password)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(e)
+            )
+        new_user = UserDB(
+            email=user_data.email,
+            username=user_data.username,
+            hashed_password=hashed_password,
+            full_name=user_data.full_name,
+            created_at=utcnow(),
+            is_active=True
+        )
+        s.add(new_user)
+        s.commit()
+        s.refresh(new_user)
+        
+        # Token oluştur (JWT'de sub string olmalı)
+        access_token = create_access_token(data={"sub": str(new_user.id)})
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": new_user.id,
+                "email": new_user.email,
+                "username": new_user.username,
+                "full_name": new_user.full_name,
+                "created_at": iso_z(new_user.created_at),
+            }
+        }
+
+@app.post("/api/v1/auth/login", response_model=Token)
+def login(credentials: UserLogin):
+    """Kullanıcı girişi"""
+    with Session(engine) as s:
+        # Username veya email ile giriş yapılabilir
+        user = s.exec(
+            select(UserDB).where(
+                (UserDB.username == credentials.username) | 
+                (UserDB.email == credentials.username)
+            )
+        ).first()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password"
+            )
+        
+        if not verify_password(credentials.password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password"
+            )
+        
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Inactive user"
+            )
+        
+        # Token oluştur (JWT'de sub string olmalı)
+        access_token = create_access_token(data={"sub": str(user.id)})
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "username": user.username,
+                "full_name": user.full_name,
+                "created_at": iso_z(user.created_at),
+            }
+        }
+
+@app.get("/api/v1/auth/me", response_model=UserResponse)
+def get_current_user_info(current_user: UserDB = Depends(get_current_active_user)):
+    """Mevcut kullanıcı bilgilerini döner"""
+    return UserResponse(
+        id=current_user.id,
+        email=current_user.email,
+        username=current_user.username,
+        full_name=current_user.full_name,
+        created_at=current_user.created_at,
+    )
 
 @app.post("/api/v1/ingest")
 def ingest(r: ReadingIn):
@@ -774,14 +1042,199 @@ def fan_control(action: str):
     return _set_actuator("fan", action)
 
 
+# ----------------- MODEL METRİKLERİ ENDPOINT -----------------
+@app.get("/api/v1/model-metrics")
+async def get_model_metrics(
+    current_user: UserDB = Depends(get_current_active_user),
+):
+    """
+    Model metriklerini döndürür: Confusion Matrix, Accuracy, Precision, Recall, F1-Score
+    Test seti üzerinde değerlendirme yapar.
+    """
+    try:
+        import torch
+        import numpy as np
+        from sklearn.metrics import confusion_matrix, classification_report
+        from torch.utils.data import Dataset, DataLoader
+        import pandas as pd
+        import os
+        from sklearn.model_selection import train_test_split
+        import albumentations as A
+        from albumentations.pytorch import ToTensorV2
+        
+        # Dataset sınıfı (notebook'tan)
+        class PlantMultiOutputDataset(Dataset):
+            def __init__(self, dataframe, transform=None):
+                self.df = dataframe
+                self.transform = transform
+                self.plant_names = sorted(set(label.split("___")[0] for label in dataframe['labels']))
+                self.status_names = sorted(set(label.split("___")[1] for label in dataframe['labels']))
+                self.plant_map = {name: idx for idx, name in enumerate(self.plant_names)}
+                self.status_map = {name.lower(): idx for idx, name in enumerate(self.status_names)}
+
+            def __len__(self):
+                return len(self.df)
+
+            def __getitem__(self, idx):
+                row = self.df.iloc[idx]
+                img = Image.open(row.filepaths).convert("RGB")
+                plant_str, status_str = row.labels.split("___")
+                plant_label = self.plant_map[plant_str]
+                status_label = self.status_map[status_str.lower()]
+                
+                if self.transform:
+                    img = self.transform(image=np.array(img))['image']
+                
+                return img, torch.tensor(plant_label), torch.tensor(status_label)
+
+        def define_paths(data_dir):
+            filepaths = []
+            labels = []
+            for fold in os.listdir(data_dir):
+                foldpath = os.path.join(data_dir, fold)
+                if os.path.isdir(foldpath):
+                    for file in os.listdir(foldpath):
+                        if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                            filepaths.append(os.path.join(foldpath, file))
+                            labels.append(fold)
+            return pd.DataFrame({'filepaths': filepaths, 'labels': labels})
+
+        def split_df(df):
+            train_df, dummy_df = train_test_split(df, train_size=0.8, stratify=df['labels'], random_state=42)
+            val_df, test_df = train_test_split(dummy_df, train_size=0.5, stratify=dummy_df['labels'], random_state=42)
+            return train_df.reset_index(drop=True), val_df.reset_index(drop=True), test_df.reset_index(drop=True)
+
+        # Model yükle
+        from .plantvillage_classifier import PlantVillageClassifier, MultiOutputModel
+        
+        model_path = PLANTVILLAGE_WEIGHTS
+        if not model_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "MODEL_NOT_FOUND", "message": "PlantVillage modeli bulunamadı."}
+            )
+
+        bundle = torch.load(model_path, map_location="cpu")
+        plant_names = bundle.get("plant_names", [])
+        status_names = bundle.get("status_names", [])
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = MultiOutputModel(len(plant_names), len(status_names))
+        model.load_state_dict(bundle["state_dict"])
+        model.eval()
+        model.to(device)
+
+        # Test seti yükle
+        data_dir = Path("PlantVillage-Dataset/raw/color")
+        if not data_dir.exists():
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "DATASET_NOT_FOUND", "message": "Dataset bulunamadı."}
+            )
+
+        df = define_paths(str(data_dir))
+        train_df, val_df, test_df = split_df(df)
+
+        test_transform = A.Compose([
+            A.Resize(224, 224),
+            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            ToTensorV2()
+        ])
+
+        test_dataset = PlantMultiOutputDataset(test_df, transform=test_transform)
+        test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, num_workers=0)
+
+        # Tahmin yap
+        all_plant_preds = []
+        all_plant_labels = []
+        all_health_preds = []
+        all_health_labels = []
+
+        with torch.no_grad():
+            for x, y_plant, y_health in test_loader:
+                x = x.to(device)
+                plant_logits, health_logits = model(x)
+                
+                plant_preds = plant_logits.argmax(1).cpu().numpy()
+                health_preds = health_logits.argmax(1).cpu().numpy()
+                
+                all_plant_preds.extend(plant_preds)
+                all_plant_labels.extend(y_plant.numpy())
+                all_health_preds.extend(health_preds)
+                all_health_labels.extend(y_health.numpy())
+
+        # Metrikler
+        plant_acc = float(np.mean(np.array(all_plant_preds) == np.array(all_plant_labels)))
+        health_acc = float(np.mean(np.array(all_health_preds) == np.array(all_health_labels)))
+
+        # Confusion Matrix
+        plant_cm = confusion_matrix(all_plant_labels, all_plant_preds).tolist()
+        health_cm = confusion_matrix(all_health_labels, all_health_preds).tolist()
+
+        # Classification Report
+        plant_report = classification_report(
+            all_plant_labels, all_plant_preds,
+            target_names=plant_names,
+            output_dict=True
+        )
+        health_report = classification_report(
+            all_health_labels, all_health_preds,
+            target_names=status_names,
+            output_dict=True
+        )
+
+        return {
+            "test_set_size": len(test_df),
+            "accuracy": {
+                "plant": plant_acc,
+                "health": health_acc,
+                "average": (plant_acc + health_acc) / 2
+            },
+            "confusion_matrices": {
+                "plant": {
+                    "matrix": plant_cm,
+                    "class_names": plant_names,
+                    "shape": [len(plant_names), len(plant_names)]
+                },
+                "health": {
+                    "matrix": health_cm,
+                    "class_names": status_names,
+                    "shape": [len(status_names), len(status_names)]
+                }
+            },
+            "classification_report": {
+                "plant": {
+                    "precision": plant_report["weighted avg"]["precision"],
+                    "recall": plant_report["weighted avg"]["recall"],
+                    "f1_score": plant_report["weighted avg"]["f1-score"]
+                },
+                "health": {
+                    "precision": health_report["weighted avg"]["precision"],
+                    "recall": health_report["weighted avg"]["recall"],
+                    "f1_score": health_report["weighted avg"]["f1-score"]
+                }
+            }
+        }
+
+    except Exception as e:
+        import traceback
+        error_msg = f"Model metrikleri hesaplanırken hata: {str(e)}\n{traceback.format_exc()}"
+        print(error_msg)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "METRICS_ERROR", "message": str(e)}
+        )
+
+
 # ----------------- BİTKİ ANALİZİ ENDPOINT -----------------
 @app.post("/api/v1/analyze-plant")
 async def analyze_plant(
     image: UploadFile = File(...),
-    model: Literal["auto", "indoor", "outdoor"] = "auto",
+    model: Literal["auto", "outdoor", "plantvillage"] = "auto",
+    current_user: UserDB = Depends(get_current_active_user),
 ):
     """
-    Bitki fotoğrafını analiz eder. En az bir eğitilmiş sınıflandırıcı gerektirir.
+    Bitki fotoğrafını analiz eder. Indoor/outdoor sınıflandırıcılarını kullanır.
     """
     try:
         contents = await image.read()
@@ -810,25 +1263,129 @@ async def analyze_plant(
                 },
             )
 
-        sorted_results = sorted(model_results, key=lambda x: x["confidence"], reverse=True)
-        best = sorted_results[0]
+        # PlantVillage modeli için özel işleme
+        is_plantvillage = False
+        plantvillage_result = None
+        for result in model_results:
+            if result["model"] == "plantvillage" and "plant" in result and "health" in result:
+                is_plantvillage = True
+                plantvillage_result = result
+                break
 
+        # En yüksek güven skoruna sahip tahmini seç
+        best = max(model_results, key=lambda r: float(r["confidence"]))
+        best_class_name = best["class_name"]
         primary_confidence = float(best["confidence"])
-        is_low_confidence = primary_confidence < LOW_CONFIDENCE_THRESHOLD
 
-        status = "Model Tahmini" if not is_low_confidence else "Düşük Güven"
+        is_low_confidence = primary_confidence < LOW_CONFIDENCE_THRESHOLD
+        status = "Model Tahmini" if not is_low_confidence else "Düşük Güven - Dikkatli Olun"
         message = None
         if is_low_confidence:
             message = (
-                "Model bu fotoğrafta emin olamadı. Daha net bir görüntü seçebilir ya da farklı açıdan tekrar deneyebilirsiniz."
+                f"⚠️ Model bu fotoğrafta emin olamadı (Güven: %{int(primary_confidence * 100)}). "
+                "Tahmin yanlış olabilir.\n\n"
+                "📸 Daha iyi sonuç için:\n"
+                "• Sadece yaprakları gösteren yakın çekim fotoğraf kullanın\n"
+                "• Temiz, düz arka plan tercih edin\n"
+                "• Yapraklar net ve odakta olsun\n"
+                "• Doğal ışıkta çekin\n\n"
+                "ℹ️ Not: Model PlantVillage dataset'inde eğitildi. "
+                "Bu dataset kontrollü koşullarda çekilmiş yaprak fotoğrafları içerir. "
+                "Tam bitki fotoğrafları veya karmaşık arka planlı görüntülerde performans düşebilir."
             )
+            # Düşük güven skorunda alternatif modelleri öner
+            if len(model_results) > 1:
+                alt_models = [r for r in model_results if r["model"] != best["model"]]
+                if alt_models:
+                    alt_best = max(alt_models, key=lambda r: float(r["confidence"]))
+                    alt_conf = float(alt_best["confidence"])
+                    if alt_conf > primary_confidence * 0.7:  # Daha düşük eşik
+                        alt_display = alt_best.get("class_name", "").replace("_", " ").replace("___", " • ")
+                        message += f"\n\nAlternatif tahmin ({alt_best['model']}): {alt_display} (Güven: %{int(alt_conf * 100)})"
 
-        class_name_lower = best["class_name"].lower()
+        # PlantVillage için özel işleme
+        if is_plantvillage and plantvillage_result:
+            plant_info = plantvillage_result["plant"]
+            health_info = plantvillage_result["health"]
+            combined_class = plantvillage_result["class_name"]  # "Plant___Status" formatı
+            
+            # Sağlık durumunu kontrol et
+            is_healthy = "healthy" in health_info["class_name"].lower()
+            health_score = health_info["confidence"] if is_healthy else 1 - health_info["confidence"]
+            health_score = max(0.0, min(1.0, health_score))
+            health_label = "Sağlıklı" if health_score >= 0.6 else "Riskli"
+            
+            # Display name oluştur
+            plant_display = plant_info["class_name"].replace("_", " ")
+            health_display = health_info["class_name"].replace("_", " ")
+            primary_display = f"{plant_display} • {health_display}"
+            
+            # Öneriler - sağlık durumuna göre
+            if is_healthy:
+                recommendations = [
+                    "Bitki sağlıklı görünüyor.",
+                    "Mevcut bakım rutininizi sürdürün.",
+                    "Düzenli olarak yaprakları kontrol etmeye devam edin.",
+                ]
+            else:
+                recommendations = recommendation_for_class(health_info["class_name"])
+                # Bitki türüne özel ek öneriler eklenebilir
+            
+            # Düşük güven skorunda ek uyarı
+            if is_low_confidence:
+                recommendations.insert(0, 
+                    f"⚠️ Dikkat: Bu tahmin düşük güven skoruna sahip (%{int(primary_confidence * 100)}). "
+                    "Model PlantVillage dataset'inde eğitildi ve sadece yaprak odaklı, temiz arka planlı fotoğraflarda iyi çalışır. "
+                    "Tam bitki fotoğrafları veya karmaşık arka planlı görüntülerde yanlış tahmin yapabilir."
+                )
+            
+            # Alternatif tahminler
+            alternatives = [
+                {
+                    "model": r["model"],
+                    "class_name": r.get("class_name", ""),
+                    "display_name": CLASS_INFO.get(r.get("class_name", ""), {}).get(
+                        "display", r.get("class_name", "").replace("_", " ").replace("___", " • ")
+                    ),
+                    "confidence": float(r.get("confidence", 0.0)),
+                }
+                for r in model_results[:5]
+            ]
+            
+            return {
+                "status": status,
+                "message": message,
+                "disease": combined_class,
+                "disease_display": primary_display,
+                "health_score": health_score,
+                "health_label": health_label,
+                "confidence_score": primary_confidence,
+                "analysis": {
+                    "model": "plantvillage",
+                    "confidence": primary_confidence,
+                    "plant": {
+                        "name": plant_info["class_name"],
+                        "confidence": plant_info["confidence"],
+                    },
+                    "health": {
+                        "status": health_info["class_name"],
+                        "confidence": health_info["confidence"],
+                    },
+                    "alternatives": alternatives,
+                },
+                "recommendations": recommendations,
+                "image_size": {"width": width, "height": height},
+            }
+
+        # Diğer modeller için (indoor/outdoor)
+        # Sağlık skoru ve etiketi
+        class_name_lower = best_class_name.lower()
         is_healthy_class = "healthy" in class_name_lower
         health_score = primary_confidence if is_healthy_class else 1 - primary_confidence
         health_score = max(0.0, min(1.0, health_score))
         health_label = "Sağlıklı" if health_score >= 0.6 else "Riskli"
 
+        # Alternatif tahminler
         alternatives = [
             {
                 "model": r["model"],
@@ -838,18 +1395,18 @@ async def analyze_plant(
                 ),
                 "confidence": float(r["confidence"]),
             }
-            for r in sorted_results[:5]
+            for r in model_results[:5]
         ]
 
-        primary_display = CLASS_INFO.get(best["class_name"], {}).get(
-            "display", best["class_name"].replace("_", " ")
+        primary_display = CLASS_INFO.get(best_class_name, {}).get(
+            "display", best_class_name.replace("_", " ")
         )
-        recommendations = recommendation_for_class(best["class_name"])
+        recommendations = recommendation_for_class(best_class_name)
 
         return {
             "status": status,
             "message": message,
-            "disease": best["class_name"],
+            "disease": best_class_name,
             "disease_display": primary_display,
             "health_score": health_score,
             "health_label": health_label,

@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'core/config.dart';
 import 'state/app_state.dart';
+import 'state/auth_state.dart';
 import 'ui/pages/home_page.dart';
 import 'ui/pages/stats_page.dart';
 import 'ui/pages/control_page.dart';
 import 'ui/pages/settings_page.dart';
 import 'ui/pages/plant_scan_page.dart';
+import 'ui/pages/login_page.dart';
+import 'ui/pages/register_page.dart';
 import 'ui/theme/app_theme.dart';
 import 'ui/widgets/glass_container.dart';
 
@@ -24,6 +27,7 @@ class PlantApp extends StatefulWidget {
 
 class _PlantAppState extends State<PlantApp> {
   int _index = 0;
+  bool _showRegister = false;
 
   final _pages = const [
     HomePage(),
@@ -37,47 +41,87 @@ class _PlantAppState extends State<PlantApp> {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => AppState()..loadDashboard(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthState()),
+        ChangeNotifierProxyProvider<AuthState, AppState>(
+          create: (_) => AppState()..loadDashboard(),
+          update: (_, authState, previous) {
+            final appState = previous ?? AppState()..loadDashboard();
+            appState.setAuthState(authState);
+            return appState;
+          },
+        ),
+      ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
         title: 'Plant AMS',
         theme: AppTheme.dark,
-        home: Scaffold(
-          backgroundColor: AppColors.background,
-          body: SafeArea(
-            child: Column(
-              children: [
-                if (_index == 0) ...[
-                  _Header(
-                    onNewAnalysis: () => _setIndex(3),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                Expanded(
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 250),
-                    switchInCurve: Curves.easeInOut,
-                    switchOutCurve: Curves.easeInOut,
-                    child: Padding(
-                      key: ValueKey(_index),
-                      padding: EdgeInsets.only(
-                        left: 16,
-                        right: 16,
-                        top: _index == 3 ? 0 : 8,
-                        bottom: 8,
-                      ),
-                      child: _pages[_index],
-                    ),
+        home: Consumer<AuthState>(
+          builder: (context, authState, _) {
+            if (authState.isLoading) {
+              return Scaffold(
+                backgroundColor: AppColors.background,
+                body: const Center(
+                  child: CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(AppColors.cyan),
                   ),
                 ),
-              ],
-            ),
-          ),
-          bottomNavigationBar: _BottomNav(
-            currentIndex: _index,
-            onSelected: _setIndex,
-          ),
+              );
+            }
+
+            if (!authState.isAuthenticated) {
+              return _showRegister
+                  ? RegisterPage(
+                      onNavigateToLogin: () {
+                        setState(() => _showRegister = false);
+                      },
+                    )
+                  : LoginPage(
+                      onNavigateToRegister: () {
+                        setState(() => _showRegister = true);
+                      },
+                    );
+            }
+
+            return Scaffold(
+              backgroundColor: AppColors.background,
+              body: SafeArea(
+                child: Column(
+                  children: [
+                    if (_index == 0) ...[
+                      _Header(
+                        onNewAnalysis: () => _setIndex(3),
+                        currentUser: authState.currentUser,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    Expanded(
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 250),
+                        switchInCurve: Curves.easeInOut,
+                        switchOutCurve: Curves.easeInOut,
+                        child: Padding(
+                          key: ValueKey(_index),
+                          padding: EdgeInsets.only(
+                            left: 16,
+                            right: 16,
+                            top: _index == 3 ? 0 : 8,
+                            bottom: 8,
+                          ),
+                          child: _pages[_index],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              bottomNavigationBar: _BottomNav(
+                currentIndex: _index,
+                onSelected: _setIndex,
+              ),
+            );
+          },
         ),
       ),
     );
@@ -85,9 +129,13 @@ class _PlantAppState extends State<PlantApp> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.onNewAnalysis});
+  const _Header({
+    required this.onNewAnalysis,
+    this.currentUser,
+  });
 
   final VoidCallback onNewAnalysis;
+  final Map<String, dynamic>? currentUser;
 
   @override
   Widget build(BuildContext context) {

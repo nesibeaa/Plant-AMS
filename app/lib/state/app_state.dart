@@ -2,11 +2,23 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/sensor_reading.dart';
 import '../services/api_service.dart';
+import 'auth_state.dart';
 
 class AppState extends ChangeNotifier {
   final api = ApiService();
   Timer? _refreshTimer;
   Timer? _quickRefreshTimer;
+  
+  // AuthState'i inject et (main.dart'tan set edilecek)
+  AuthState? _authState;
+  
+  void setAuthState(AuthState authState) {
+    _authState = authState;
+    // Token geçersiz olduğunda otomatik logout
+    api.onUnauthorized = () {
+      _authState?.logout();
+    };
+  }
 
   LatestReadings? latest;
   List<SensorPoint> tempSeries = [], humiditySeries = [], co2Series = [];

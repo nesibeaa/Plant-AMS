@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:image_picker/image_picker.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'dart:typed_data';
-import '../../core/config.dart';
+import '../../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass_container.dart';
 
@@ -36,6 +34,7 @@ class PlantScanPage extends StatefulWidget {
 
 class _PlantScanPageState extends State<PlantScanPage> {
   final ImagePicker _picker = ImagePicker();
+  final ApiService _apiService = ApiService();
   XFile? _selectedImageFile;
   Uint8List? _selectedImageBytes;
   bool _uploading = false;
@@ -76,41 +75,14 @@ class _PlantScanPageState extends State<PlantScanPage> {
     });
 
     try {
-      final uri = Uri.parse('${AppConfig.baseUrl}/api/v1/analyze-plant');
-      final request = http.MultipartRequest('POST', uri);
-
-      if (kIsWeb) {
-        request.files.add(
-          http.MultipartFile.fromBytes(
-            'image',
-            _selectedImageBytes!,
-            filename: _selectedImageFile!.name,
-          ),
-        );
-      } else {
-        request.files.add(
-          await http.MultipartFile.fromPath('image', _selectedImageFile!.path),
-        );
-      }
-
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        setState(() {
-          _analysisResult = data;
-          _uploading = false;
-        });
-      } else {
-        setState(() {
-          _error = 'Analiz hatası: ${response.statusCode} - ${response.body}';
-          _uploading = false;
-        });
-      }
+      final data = await _apiService.analyzePlant(imageBytes: _selectedImageBytes!);
+      setState(() {
+        _analysisResult = data;
+        _uploading = false;
+      });
     } catch (e) {
       setState(() {
-        _error = 'Bağlantı hatası: $e';
+        _error = 'Analiz hatası: $e';
         _uploading = false;
       });
     }

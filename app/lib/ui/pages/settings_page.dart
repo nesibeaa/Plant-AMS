@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../core/config.dart';
+import '../../state/auth_state.dart';
 import '../widgets/glass_container.dart';
 import '../theme/app_theme.dart';
 
@@ -30,12 +32,110 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final authState = context.watch<AuthState>();
+    final currentUser = authState.currentUser;
+
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
       children: [
         Text('Ayarlar', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
         const SizedBox(height: 16),
+        // Kullanıcı Bilgileri
+        if (currentUser != null)
+          GlassContainer(
+            padding: const EdgeInsets.all(18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      height: 48,
+                      width: 48,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        gradient: LinearGradient(
+                          colors: [
+                            AppColors.cyan,
+                            AppColors.cyan.withOpacity(0.7),
+                          ],
+                        ),
+                      ),
+                      child: Center(
+                        child: Text(
+                          (currentUser['username'] as String? ?? 'U')[0].toUpperCase(),
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: Colors.black,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            currentUser['full_name'] as String? ?? 
+                            currentUser['username'] as String? ?? 
+                            'Kullanıcı',
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            currentUser['email'] as String? ?? '',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        backgroundColor: AppColors.background,
+                        title: const Text('Çıkış Yap'),
+                        content: const Text('Çıkış yapmak istediğinize emin misiniz?'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, false),
+                            child: const Text('İptal'),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.pop(context, true),
+                            child: Text(
+                              'Çıkış Yap',
+                              style: TextStyle(color: AppColors.danger),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirm == true && context.mounted) {
+                      await authState.logout();
+                    }
+                  },
+                  icon: const Icon(Icons.logout),
+                  label: const Text('Çıkış Yap'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.danger,
+                    side: BorderSide(color: AppColors.danger.withOpacity(0.5)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (currentUser != null) const SizedBox(height: 16),
         GlassContainer(
           padding: const EdgeInsets.all(18),
           child: Column(

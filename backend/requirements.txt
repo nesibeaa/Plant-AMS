@@ -2,8 +2,13 @@ fastapi
 uvicorn
 sqlmodel
 pydantic
+email-validator
 Pillow
 numpy
 python-multipart
 torch
 timm
+python-jose[cryptography]
+passlib[bcrypt]
+python-dotenv
+opencv-python-headless

@@ -1,19 +1,32 @@
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import '../core/config.dart';
 import '../models/sensor_reading.dart';
+import 'auth_service.dart';
 
 const bool MOCK_MODE = false; // backend bağlayınca false yapacağız
 
 class ApiService {
   final _client = http.Client();
+  final _authService = AuthService();
+  
+  // Token geçersiz olduğunda çağrılacak callback
+  Function()? onUnauthorized;
 
   Uri _u(String path, [Map<String,String>? q]) {
     final params = q ?? <String, String>{};
     // Cache-busting ekle
     params['_'] = DateTime.now().millisecondsSinceEpoch.toString();
     return Uri.parse('${AppConfig.baseUrl}$path').replace(queryParameters: params);
+  }
+  
+  // 401 hatası kontrolü ve otomatik logout
+  void _handleUnauthorized() {
+    if (onUnauthorized != null) {
+      onUnauthorized!();
+    }
   }
 
   Future<LatestReadings> getLatest() async {
@@ -144,5 +157,44 @@ class ApiService {
     final r = await _client.get(_u('/api/v1/actuator/history', {'limit': limit.toString()}));
     if (r.statusCode != 200) throw Exception('getActuatorHistory ${r.statusCode}');
     return List<Map<String, dynamic>>.from(jsonDecode(r.body));
+  }
+
+  Future<Map<String, dynamic>> analyzePlant({
+    required Uint8List imageBytes,
+    String model = 'auto',
+  }) async {
+    final token = await _authService.getToken();
+    if (token == null) {
+      throw Exception('Authentication required');
+    }
+
+    final uri = Uri.parse('${AppConfig.baseUrl}/api/v1/analyze-plant')
+        .replace(queryParameters: {'model': model});
+    
+    final request = http.MultipartRequest('POST', uri);
+    request.headers['Authorization'] = 'Bearer $token';
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        'image',
+        imageBytes,
+        filename: 'plant.jpg',
+      ),
+    );
+
+    final streamedResponse = await _client.send(request);
+    final response = await http.Response.fromStream(streamedResponse);
+
+    // Token geçersizse (401) otomatik logout
+    if (response.statusCode == 401) {
+      _handleUnauthorized();
+      throw Exception('Oturum süreniz dolmuş. Lütfen tekrar giriş yapın.');
+    }
+
+    if (response.statusCode != 200) {
+      final errorBody = response.body;
+      throw Exception('Analyze plant failed: ${response.statusCode} - $errorBody');
+    }
+
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 }
