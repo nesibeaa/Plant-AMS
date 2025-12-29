@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../state/app_state.dart';
-import '../../core/config.dart';
 import '../../models/sensor_reading.dart';
+import '../../services/api_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/glass_container.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -14,11 +13,31 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  final ApiService _apiService = ApiService();
+  Map<String, dynamic>? _weatherData;
+  bool _weatherLoading = false;
+
+  Future<void> _loadWeather() async {
+    setState(() => _weatherLoading = true);
+    try {
+      // Şimdilik Istanbul kullan, ileride kullanıcı konumunu ekleyebiliriz
+      final data = await _apiService.getWeather();
+      setState(() {
+        _weatherData = data;
+        _weatherLoading = false;
+      });
+    } catch (e) {
+      setState(() => _weatherLoading = false);
+      // Hata durumunda sessizce devam et, mock data gösterilecek
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<AppState>().loadDashboard();
+      _loadWeather();
     });
   }
 
@@ -42,7 +61,7 @@ class _HomePageState extends State<HomePage> {
               child: Text(
                 state.error!,
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.white70),
+                style: Theme.of(context).textTheme.bodyLarge,
               ),
             ),
             const SizedBox(height: 16),
@@ -59,33 +78,653 @@ class _HomePageState extends State<HomePage> {
     final latest = state.latest;
 
     return RefreshIndicator(
-      onRefresh: () => state.loadDashboard(),
-      backgroundColor: AppColors.glassSurface(0.3),
-      color: AppColors.cyan,
+      onRefresh: () async {
+        await state.loadDashboard();
+        await _loadWeather();
+      },
+      backgroundColor: AppColors.cardBackground,
+      color: AppColors.primary,
       child: ListView(
-        physics: const BouncingScrollPhysics(),
+        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+        padding: const EdgeInsets.all(16),
         children: [
+          const SizedBox(height: 8),
+          // Hava Durumu Kartı
+          _WeatherCard(
+            weatherData: _weatherData, 
+            loading: _weatherLoading,
+            forecast: _weatherData?['forecast'] as List<dynamic>?,
+          ),
+          const SizedBox(height: 20),
+          
+          // Sensör Verileri
           if (latest != null) ...[
             _SensorSection(latest: latest),
             const SizedBox(height: 20),
           ],
-          _AlertsSection(
-            alerts: state.alerts,
-            onSeeAll: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => AlertsPage(alerts: state.alerts),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 20),
-          const _AnalysisHistorySection(),
-          const SizedBox(height: 20),
-          _ModelStatusCard(baseUrl: AppConfig.baseUrl),
-          const SizedBox(height: 24),
         ],
       ),
+    );
+  }
+}
+
+class _WeatherCard extends StatelessWidget {
+  const _WeatherCard({
+    this.weatherData, 
+    this.loading = false,
+    this.forecast,
+  });
+
+  final Map<String, dynamic>? weatherData;
+  final bool loading;
+  final List<dynamic>? forecast;
+
+  @override
+  Widget build(BuildContext context) {
+    // Veri yoksa ve yüklenmiyorsa, kartı gösterme (default değerler gösterilmeyecek)
+    if (weatherData == null) {
+      // Yükleniyorsa loading göster
+      if (loading) {
+        return Container(
+          decoration: BoxDecoration(
+            color: AppColors.cardBackground,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppColors.border),
+          ),
+          padding: const EdgeInsets.all(16),
+          child: const Center(
+            child: CircularProgressIndicator(),
+          ),
+        );
+      }
+      // Veri yoksa ve yüklenmiyorsa kartı gizle
+      return const SizedBox.shrink();
+    }
+    
+    // Weather data varsa gerçek verileri kullan
+    final temp = weatherData!['temp'] as num? ?? 0.0;
+    final feelsLike = weatherData!['feels_like'] as num? ?? 0.0;
+    final humidity = weatherData!['humidity'] as int? ?? 0;
+    final windSpeed = weatherData!['wind_speed'] as num? ?? 0.0;
+    final description = weatherData!['description'] as String? ?? '';
+    final city = weatherData!['city'] as String? ?? '';
+    final weatherCode = weatherData!['weather_code'] as int? ?? 2;
+    final iconType = weatherData!['icon'] as String? ?? 'clouds';
+    
+    // Weather code'a göre ikon seç
+    IconData weatherIcon;
+    Color iconColor;
+    Color iconBg;
+    Color iconBorder;
+    
+    // Gece/gündüz kontrolü (sadece açık hava için)
+    final now = DateTime.now();
+    final hour = now.hour;
+    final isNight = hour < 6 || hour >= 18;
+    
+    if (weatherCode == 0 || iconType == 'clear') {
+      // Açık hava - gece ise ay, gündüz ise güneş
+      if (isNight) {
+        weatherIcon = Icons.nightlight_round;
+        iconColor = const Color(0xFF6366F1); // indigo-500
+        iconBg = const Color(0xFFEEF2FF); // indigo-100
+        iconBorder = const Color(0xFFC7D2FE); // indigo-200
+      } else {
+        weatherIcon = Icons.wb_sunny;
+        iconColor = const Color(0xFFF59E0B); // amber-500
+        iconBg = const Color(0xFFFEF3C7); // amber-100
+        iconBorder = const Color(0xFFFDE68A); // amber-200
+      }
+    } else if ([1, 2, 3].contains(weatherCode) || iconType == 'clouds') {
+      // Bulutlu
+      weatherIcon = Icons.wb_cloudy_outlined;
+      iconColor = const Color(0xFF94A3B8); // slate-400
+      iconBg = const Color(0xFFE0F2FE); // sky-100
+      iconBorder = const Color(0xFFBAE6FD); // sky-200
+    } else if ((weatherCode >= 51 && weatherCode <= 68) || iconType == 'rain') {
+      // Yağmurlu
+      weatherIcon = Icons.grain;
+      iconColor = const Color(0xFF3B82F6); // blue-500
+      iconBg = const Color(0xFFDBEAFE); // blue-100
+      iconBorder = const Color(0xFFBFDBFE); // blue-200
+    } else if ((weatherCode >= 71 && weatherCode <= 78) || iconType == 'snow') {
+      // Karlı
+      weatherIcon = Icons.ac_unit;
+      iconColor = const Color(0xFF60A5FA); // blue-400
+      iconBg = const Color(0xFFE0F2FE); // sky-100
+      iconBorder = const Color(0xFFBAE6FD); // sky-200
+    } else if ((weatherCode >= 95 && weatherCode <= 99) || iconType == 'thunderstorm') {
+      // Fırtınalı
+      weatherIcon = Icons.flash_on;
+      iconColor = const Color(0xFFF59E0B); // amber-500
+      iconBg = const Color(0xFFFEF3C7); // amber-100
+      iconBorder = const Color(0xFFFDE68A); // amber-200
+    } else if ([45, 48].contains(weatherCode) || iconType == 'mist') {
+      // Sisli
+      weatherIcon = Icons.blur_on;
+      iconColor = const Color(0xFF94A3B8); // slate-400
+      iconBg = const Color(0xFFF1F5F9); // slate-100
+      iconBorder = const Color(0xFFCBD5E1); // slate-200
+    } else {
+      // Varsayılan: bulutlu
+      weatherIcon = Icons.wb_cloudy_outlined;
+      iconColor = const Color(0xFF94A3B8);
+      iconBg = const Color(0xFFE0F2FE);
+      iconBorder = const Color(0xFFBAE6FD);
+    }
+    
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.cardBackground,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.border),
+                ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Bugünkü Hava Durumu',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: AppColors.textSecondary,
+                          ),
+          ),
+                    const SizedBox(height: 4),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '${(temp as num).toStringAsFixed(0)}°C',
+                          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.textPrimary,
+                                letterSpacing: -0.5,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // Weather icon (dinamik)
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: iconBg,
+                  borderRadius: BorderRadius.circular(100),
+                  border: Border.all(color: iconBorder),
+                ),
+                child: Icon(
+                  weatherIcon,
+                  color: iconColor,
+                  size: 20,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // Açıklama - tam genişlikte
+          Text(
+            description,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                ),
+          ),
+          const SizedBox(height: 12),
+          // Detaylar - yan yana
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Hissedilen: ${(feelsLike as num).toStringAsFixed(0)}°C',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.textSecondary,
+                      fontSize: 11,
+                    ),
+              ),
+              Text(
+                'Nem: %${humidity.toStringAsFixed(0)} • Rüzgar: ${(windSpeed as num).toStringAsFixed(0)} km/s',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.textSecondary,
+                      fontSize: 11,
+                    ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Konum: $city',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.textSecondary,
+                  fontSize: 11,
+                ),
+          ),
+          
+          // Bitki Bakım Önerileri
+          _PlantCareRecommendations(weatherData: weatherData),
+          
+          // Haftalık Tahmin - Expandable
+          if (forecast != null && forecast!.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Divider(height: 1, color: AppColors.border.withOpacity(0.5)),
+            _ExpandableForecast(forecast: forecast!),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ExpandableForecast extends StatefulWidget {
+  const _ExpandableForecast({required this.forecast});
+
+  final List<dynamic> forecast;
+
+  @override
+  State<_ExpandableForecast> createState() => _ExpandableForecastState();
+}
+
+class _ExpandableForecastState extends State<_ExpandableForecast> {
+  bool _isExpanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        InkWell(
+          onTap: () {
+            setState(() {
+              _isExpanded = !_isExpanded;
+            });
+          },
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Haftalık Tahmin',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: AppColors.textPrimary,
+                        fontWeight: FontWeight.w500,
+                      ),
+                ),
+                Icon(
+                  _isExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                  color: AppColors.textSecondary,
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_isExpanded) ...[
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 82,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: widget.forecast.take(7).map((day) {
+                final dayData = day as Map<String, dynamic>;
+                return _ForecastDayItem(
+                  date: dayData['date'] as String? ?? '',
+                  maxTemp: (dayData['max_temp'] as num?)?.toDouble() ?? 0.0,
+                  minTemp: (dayData['min_temp'] as num?)?.toDouble() ?? 0.0,
+                  weatherCode: dayData['weather_code'] as int? ?? 2,
+                  icon: dayData['icon'] as String? ?? 'clouds',
+                  description: dayData['description'] as String? ?? 'Bulutlu',
+                  isLast: false,
+                  isCompact: true,
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ForecastDayItem extends StatelessWidget {
+  const _ForecastDayItem({
+    required this.date,
+    required this.maxTemp,
+    required this.minTemp,
+    required this.weatherCode,
+    required this.icon,
+    required this.description,
+    this.isLast = false,
+    this.isCompact = false,
+  });
+
+  final String date;
+  final double maxTemp;
+  final double minTemp;
+  final int weatherCode;
+  final String icon;
+  final String description;
+  final bool isLast;
+  final bool isCompact;
+
+  IconData _getWeatherIcon() {
+    if (weatherCode == 0 || icon == 'clear') {
+      return Icons.wb_sunny;
+    } else if ([1, 2, 3].contains(weatherCode) || icon == 'clouds') {
+      return Icons.wb_cloudy_outlined;
+    } else if ((weatherCode >= 51 && weatherCode <= 68) || icon == 'rain') {
+      return Icons.grain;
+    } else if ((weatherCode >= 71 && weatherCode <= 78) || icon == 'snow') {
+      return Icons.ac_unit;
+    } else if ((weatherCode >= 95 && weatherCode <= 99) || icon == 'thunderstorm') {
+      return Icons.flash_on;
+    } else if ([45, 48].contains(weatherCode) || icon == 'mist') {
+      return Icons.blur_on;
+    } else {
+      return Icons.wb_cloudy_outlined;
+    }
+  }
+
+  Color _getIconColor() {
+    if (weatherCode == 0 || icon == 'clear') {
+      return const Color(0xFFF59E0B);
+    } else if ([1, 2, 3].contains(weatherCode) || icon == 'clouds') {
+      return const Color(0xFF94A3B8);
+    } else if ((weatherCode >= 51 && weatherCode <= 68) || icon == 'rain') {
+      return const Color(0xFF3B82F6);
+    } else if ((weatherCode >= 71 && weatherCode <= 78) || icon == 'snow') {
+      return const Color(0xFF60A5FA);
+    } else if ((weatherCode >= 95 && weatherCode <= 99) || icon == 'thunderstorm') {
+      return const Color(0xFFF59E0B);
+    } else {
+      return const Color(0xFF94A3B8);
+    }
+  }
+
+  String _formatDate(String dateStr, {bool compact = false}) {
+    if (dateStr.isEmpty) return '';
+    try {
+      final date = DateTime.parse(dateStr);
+      
+      // Türkçe gün isimleri - Bugün/Yarın demeden direkt gün adı
+      if (compact) {
+        final weekdaysShort = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
+        return weekdaysShort[date.weekday - 1];
+      } else {
+        final weekdays = ['Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi', 'Pazar'];
+        return weekdays[date.weekday - 1];
+      }
+    } catch (e) {
+      return dateStr;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dayName = _formatDate(date, compact: isCompact);
+    final iconData = _getWeatherIcon();
+    final iconColor = _getIconColor();
+
+    // Compact (yatay) görünüm
+    if (isCompact) {
+      return SizedBox(
+        width: 60,
+        child: Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Gün adı
+              Text(
+                dayName,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 10,
+                    ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 3),
+              // İkon
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: iconColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: iconColor.withOpacity(0.3)),
+                ),
+                child: Icon(
+                  iconData,
+                  color: iconColor,
+                  size: 13,
+                ),
+              ),
+              const SizedBox(height: 3),
+              // Sıcaklık
+              Text(
+                '${maxTemp.toStringAsFixed(0)}°',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 10,
+                    ),
+              ),
+              Text(
+                '${minTemp.toStringAsFixed(0)}°',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.textTertiary,
+                      fontSize: 9,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // Dikey (liste) görünüm
+    return Column(
+      children: [
+        Row(
+          children: [
+            // Gün adı
+            SizedBox(
+              width: 70,
+              child: Text(
+                dayName,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w500,
+                      fontSize: 12,
+                    ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            // İkon
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: iconColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: iconColor.withOpacity(0.3)),
+              ),
+              child: Icon(
+                iconData,
+                color: iconColor,
+                size: 18,
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Açıklama
+            Expanded(
+              child: Text(
+                description,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.textSecondary,
+                      fontSize: 11,
+                    ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Sıcaklık
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '${maxTemp.toStringAsFixed(0)}°',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.textPrimary,
+                        fontWeight: FontWeight.w500,
+                        fontSize: 12,
+                      ),
+                ),
+                Text(
+                  ' / ${minTemp.toStringAsFixed(0)}°',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.textTertiary,
+                        fontSize: 11,
+                      ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        if (!isLast) ...[
+          const SizedBox(height: 12),
+          Divider(height: 1, color: AppColors.border.withOpacity(0.5)),
+          const SizedBox(height: 12),
+        ],
+      ],
+    );
+  }
+}
+
+class _PlantCareRecommendations extends StatelessWidget {
+  const _PlantCareRecommendations({this.weatherData});
+
+  final Map<String, dynamic>? weatherData;
+
+  String _getRecommendation() {
+    if (weatherData == null) return 'Hava durumu verisi yükleniyor...';
+    
+    final temp = (weatherData!['temp'] as num?)?.toDouble() ?? 20.0;
+    final humidity = (weatherData!['humidity'] as num?)?.toInt() ?? 50;
+    final description = (weatherData!['description'] as String?) ?? '';
+    final icon = (weatherData!['icon'] as String?) ?? 'clouds';
+    
+    // Sıcaklık bazlı öneriler
+    if (temp < 10) {
+      return 'Hava çok soğuk. Bitkilerinizi içeri alın veya don koruması sağlayın. Sıcak bir yere taşıyın.';
+    } else if (temp < 18) {
+      return 'Hava serin. Bitkilerinizi soğuktan koruyun. Sulamayı azaltın ve sıcak bir yerde tutun.';
+    } else if (temp > 30) {
+      return 'Hava çok sıcak! Bitkilerinize daha sık su verin. Direkt güneşten koruyun ve gölge sağlayın.';
+    } else if (temp > 25) {
+      return 'Hava sıcak. Bitkilerinizi daha sık sulayın. Sabah veya akşam saatlerinde sulama yapın.';
+    }
+    
+    // Nem bazlı öneriler
+    if (humidity < 30) {
+      return 'Hava çok kuru. Bitkilerinize nem sağlayın. Yapraklara su püskürtün veya nemlendirici kullanın.';
+    } else if (humidity < 40) {
+      return 'Hava kuru. Bitkileriniz için ekstra nem gerekebilir. Sulama sıklığını kontrol edin.';
+    } else if (humidity > 70) {
+      return 'Hava nemli. Havalandırmayı artırın. Aşırı sulamadan kaçının ve bitkilerinizi havalandırın.';
+    }
+    
+    // Hava durumu bazlı öneriler
+    if (icon == 'rain' || description.toLowerCase().contains('yağmur')) {
+      return 'Yağmurlu hava. Sulama yapmanıza gerek yok. Bitkilerinizi fazla sudan koruyun.';
+    } else if (icon == 'clear') {
+      return 'Güneşli hava. Bitkileriniz bol ışık alıyor. Sulamayı düzenli yapın ve yaprakları temiz tutun.';
+    } else if (icon == 'snow' || description.toLowerCase().contains('kar')) {
+      return 'Karlı hava! Bitkilerinizi içeri alın veya sıcak bir yerde tutun. Don riskine karşı koruyun.';
+    }
+    
+    // Varsayılan öneri
+    return 'Hava durumu normal. Düzenli bakım yapın, toprak nemini kontrol edin ve bitkilerinizi gözlemleyin.';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final recommendation = _getRecommendation();
+
+    return Column(
+      children: [
+        const SizedBox(height: 16),
+        Divider(height: 1, color: AppColors.border.withOpacity(0.5)),
+        const SizedBox(height: 12),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Bitki bakım ikonu - diğer ikonlarla aynı boyut (40x40)
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppColors.primary.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(100),
+                border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(100),
+                child: Image.asset(
+                  'assets/images/bakim.png',
+                  width: 40,
+                  height: 40,
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Icon(
+                      Icons.emoji_nature,
+                      color: AppColors.primary,
+                      size: 20,
+                    );
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Öneri metni
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Bitki Bakım Önerisi',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppColors.textSecondary,
+                          fontSize: 11,
+                        ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    recommendation,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppColors.textPrimary,
+                          fontSize: 12,
+                          height: 1.4,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -97,69 +736,89 @@ class _SensorSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Son Sensör Verileri', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
-        const SizedBox(height: 8),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final isWide = constraints.maxWidth > 520;
-            return GridView.count(
-              crossAxisCount: isWide ? 3 : 2,
-              mainAxisSpacing: 8,
-              crossAxisSpacing: 8,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              childAspectRatio: isWide ? 1.08 : 0.9,
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              'Sensör Verileri',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textPrimary,
+                    letterSpacing: -0.5,
+                  ),
+            ),
+            Text(
+              'Son Senkron: 2dk önce',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppColors.textSecondary,
+                  ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Column(
               children: [
                 _SensorCard(
                   icon: Icons.thermostat,
                   label: 'Sıcaklık',
                   value: '${latest.temp.toStringAsFixed(1)}°C',
-                  status: _statusForValue('temp', latest.temp),
-                  description: 'Eşik 16–26°C',
+              status: _getStatus('temp', latest.temp),
+              iconColor: const Color(0xFF10B981), // emerald-500
+              iconBg: const Color(0xFFD1FAE5), // emerald-400/10
+              iconBorder: const Color(0xFFA7F3D0), // emerald-300/70
+              ringColor: const Color(0xFFD1FAE5), // emerald-200
+              range: 'Eşik: 18–28°C',
                 ),
+            const SizedBox(height: 12),
                 _SensorCard(
                   icon: Icons.water_drop,
                   label: 'Nem',
-                  value: '${latest.humidity.toStringAsFixed(1)}%',
-                  status: _statusForValue('humidity', latest.humidity),
-                  description: 'Eşik 45–80%',
+              value: '${latest.humidity.toStringAsFixed(0)}%',
+              status: _getStatus('humidity', latest.humidity),
+              iconColor: const Color(0xFFF59E0B), // amber-500
+              iconBg: const Color(0xFFFEF3C7), // amber-400/10
+              iconBorder: const Color(0xFFFDE68A), // amber-300/70
+              ringColor: const Color(0xFFFEF3C7), // amber-200
+              range: 'Eşik: 40–70%',
                 ),
+            const SizedBox(height: 12),
                 _SensorCard(
                   icon: Icons.cloud,
                   label: 'CO₂',
                   value: '${latest.co2.toStringAsFixed(0)} ppm',
-                  status: _statusForValue('co2', latest.co2),
-                  description: 'Eşik ≤ 1200 ppm',
+              status: _getStatus('co2', latest.co2),
+              iconColor: const Color(0xFFEF4444), // red-500
+              iconBg: const Color(0xFFFEE2E2), // red-400/10
+              iconBorder: const Color(0xFFFECACA), // red-400/70
+              ringColor: const Color(0xFFDBEAFE), // sky-200 (HTML'de sky-200 kullanılmış)
+              range: 'Eşik: 400–1000 ppm',
                 ),
               ],
-            );
-          },
         ),
       ],
     );
   }
 
-  _SensorStatus _statusForValue(String sensor, double value) {
+  _SensorStatus _getStatus(String sensor, double value) {
     switch (sensor) {
       case 'temp':
-        if (value < 16) return const _SensorStatus('Düşük', AppColors.amber);
-        if (value > 26) return const _SensorStatus('Yüksek', AppColors.danger);
-        return const _SensorStatus('Normal', AppColors.cyan);
+        if (value < 18) return const _SensorStatus('Düşük', Color(0xFFF59E0B));
+        if (value > 28) return const _SensorStatus('Yüksek', Color(0xFFEF4444));
+        return const _SensorStatus('Normal', Color(0xFF10B981));
       case 'humidity':
-        if (value < 45) return const _SensorStatus('Düşük', AppColors.amber);
-        if (value > 80) return const _SensorStatus('Yüksek', AppColors.danger);
-        return const _SensorStatus('Normal', AppColors.cyan);
+        if (value < 40) return const _SensorStatus('Düşük', Color(0xFFF59E0B));
+        if (value > 70) return const _SensorStatus('Yüksek', Color(0xFFEF4444));
+        return const _SensorStatus('Normal', Color(0xFF10B981));
       case 'co2':
-        if (value > 1200) return const _SensorStatus('Yüksek', AppColors.danger);
-        if (value < 400) return const _SensorStatus('Düşük', AppColors.amber);
-        return const _SensorStatus('Normal', AppColors.cyan);
+        if (value > 1000) return const _SensorStatus('Yüksek', Color(0xFFEF4444));
+        if (value < 400) return const _SensorStatus('Düşük', Color(0xFFF59E0B));
+        return const _SensorStatus('Normal', Color(0xFF10B981));
       default:
-        return const _SensorStatus('—', Colors.white54);
+        return const _SensorStatus('—', AppColors.textSecondary);
     }
   }
 }
@@ -176,339 +835,142 @@ class _SensorCard extends StatelessWidget {
     required this.label,
     required this.value,
     required this.status,
-    required this.description,
+    required this.iconColor,
+    required this.iconBg,
+    required this.iconBorder,
+    required this.ringColor,
+    required this.range,
   });
 
   final IconData icon;
   final String label;
   final String value;
   final _SensorStatus status;
-  final String description;
+  final Color iconColor;
+  final Color iconBg;
+  final Color iconBorder;
+  final Color ringColor;
+  final String range;
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return GlassContainer(
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Container(
-                height: 42,
-                width: 42,
-                decoration: BoxDecoration(
-                  color: status.color.withOpacity(0.16),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: status.color.withOpacity(0.35)),
-                ),
-                child: Icon(icon, color: status.color, size: 22),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: status.color.withOpacity(0.18),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: status.color.withOpacity(0.45)),
-                ),
-                child: Text(
-                  status.label,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                        color: status.color,
-                        fontWeight: FontWeight.w600,
-                      ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            label,
-            style: theme.textTheme.bodyLarge?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            description,
-            style: theme.textTheme.labelSmall?.copyWith(color: Colors.white54),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            value,
-            style: theme.textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-Color _alertColor(String level) {
-  switch (level) {
-    case 'warn':
-      return AppColors.amber;
-    case 'error':
-    case 'crit':
-      return AppColors.danger;
-    case 'info':
-    default:
-      return AppColors.success;
-  }
-}
-
-String _alertTime(String ts) {
-  try {
-    final time = DateTime.parse(ts);
-    final now = DateTime.now();
-    final diff = now.difference(time);
-    if (diff.inMinutes < 1) return 'Az önce';
-    if (diff.inMinutes < 60) return '${diff.inMinutes} dk önce';
-    if (diff.inHours < 24) return '${diff.inHours} saat önce';
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-  } catch (_) {
-    return ts;
-  }
-}
-
-class _AlertsSection extends StatelessWidget {
-  const _AlertsSection({required this.alerts, required this.onSeeAll});
-
-  final List<Map<String, dynamic>> alerts;
-  final VoidCallback onSeeAll;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    if (alerts.isEmpty) {
-      return const SizedBox.shrink();
+  Map<String, dynamic> _getBadgeStyle() {
+    if (status.label == 'Normal') {
+      return {
+        'bg': const Color(0xFFECFDF5), // emerald-50
+        'border': const Color(0xFFD1FAE5), // emerald-200
+        'text': const Color(0xFF065F46), // emerald-700
+      };
+    } else if (status.label == 'Düşük') {
+      return {
+        'bg': const Color(0xFFFEF3C7), // amber-50
+        'border': const Color(0xFFFEF3C7), // amber-200
+        'text': const Color(0xFF92400E), // amber-700
+      };
+    } else {
+      return {
+        'bg': const Color(0xFFFEF2F2), // red-50
+        'border': const Color(0xFFEF4444), // red-500
+        'text': const Color(0xFFEF4444), // red-500
+      };
     }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final badgeStyle = _getBadgeStyle();
     
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('Son Uyarılar', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
-            GestureDetector(
-              onTap: onSeeAll,
-              child: Text(
-                'Tümü',
-                style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54, decoration: TextDecoration.underline),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        GlassContainer(
-          padding: EdgeInsets.zero,
-          child: Column(
-            children: [
-              for (final alert in alerts.take(4))
-                ListTile(
-                  leading: Container(
-                    height: 8,
-                    width: 8,
-                    decoration: BoxDecoration(
-                      color: _alertColor(alert['level'] as String? ?? 'info'),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  title: Text(
-                    alert['message'] as String? ?? 'Bilinmeyen uyarı',
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  subtitle: Text(
-                    _alertTime(alert['ts'] as String? ?? ''),
-                    style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54),
-                  ),
-                  trailing: Checkbox(
-                    value: false,
-                    onChanged: (_) {},
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                    side: BorderSide(color: AppColors.glassSurface(0.2)),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class AlertsPage extends StatelessWidget {
-  const AlertsPage({super.key, required this.alerts});
-
-  final List<Map<String, dynamic>> alerts;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        backgroundColor: AppColors.background,
-        elevation: 0,
-        title: const Text('Tüm Uyarılar'),
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.cardBackground,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.border),
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: GlassContainer(
-          padding: EdgeInsets.zero,
-          child: ListView.separated(
-            itemCount: alerts.length,
-            separatorBuilder: (_, __) => Divider(
-              height: 1,
-              color: AppColors.glassSurface(0.2),
-            ),
-            itemBuilder: (context, index) {
-              final alert = alerts[index];
-              final color = _alertColor(alert['level'] as String? ?? 'info');
-              return ListTile(
-                leading: Container(
-                  height: 10,
-                  width: 10,
-                  decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-                ),
-                title: Text(
-                  alert['message'] as String? ?? 'Bilinmeyen uyarı',
-                  style: theme.textTheme.bodyMedium,
-                ),
-                subtitle: Text(
-                  _alertTime(alert['ts'] as String? ?? ''),
-                  style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54),
-                ),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _AnalysisHistorySection extends StatelessWidget {
-  const _AnalysisHistorySection();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final samples = [
-      const _AnalysisHistoryCard('https://images.unsplash.com/photo-1525253086316-d0c936c814f8?q=80&w=600&auto=format&fit=crop', 'Sağlıklı • %92'),
-      const _AnalysisHistoryCard('https://images.unsplash.com/photo-1438109491414-7198515b166b?q=80&w=600&auto=format&fit=crop', 'Mildiyö • %82'),
-      const _AnalysisHistoryCard('https://images.unsplash.com/photo-1501004318641-b39e6451bec6?q=80&w=600&auto=format&fit=crop', 'Yaprak yanığı • %66'),
-    ];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('Analiz Geçmişi', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
-            Text('Tümü', style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54)),
-          ],
-        ),
-        const SizedBox(height: 12),
-        GlassContainer(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: samples
-                .map((sample) => Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6),
-                        child: sample,
-                      ),
-                    ))
-                .toList(),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _AnalysisHistoryCard extends StatelessWidget {
-  const _AnalysisHistoryCard(this.imageUrl, this.caption);
-  final String imageUrl;
-  final String caption;
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
       child: Stack(
         children: [
-          AspectRatio(
-            aspectRatio: 4 / 3,
-            child: Image.network(imageUrl, fit: BoxFit.cover),
+          // Ring border (absolute positioned)
+          Positioned.fill(
+            child: Container(
+                decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: ringColor, width: 1),
+                ),
           ),
-          Positioned(
-            left: 6,
-            right: 6,
-            bottom: 6,
-            child: GlassContainer(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              borderRadius: 10,
-              colorOpacity: 0.22,
-              child: Text(
-                caption,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.labelSmall,
-              ),
-            ),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ModelStatusCard extends StatelessWidget {
-  const _ModelStatusCard({required this.baseUrl});
-  final String baseUrl;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return GlassContainer(
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+          // Content
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: iconBg,
+                              borderRadius: BorderRadius.circular(100),
+                              border: Border.all(color: iconBorder),
+                            ),
+                            child: Icon(icon, color: iconColor, size: 20),
+        ),
+                          const SizedBox(width: 10),
+                          Flexible(
+          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                height: 8,
-                width: 8,
-                decoration: const BoxDecoration(color: AppColors.cyan, shape: BoxShape.circle),
-              ),
-              const SizedBox(width: 8),
-              Text('Model Durumu', style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60)),
+                                Text(
+                                  label,
+                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                        color: AppColors.textSecondary,
+                    ),
+                  ),
+                                Text(
+                                  value,
+                                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                        fontWeight: FontWeight.w500,
+                                        color: AppColors.textPrimary,
+                                        letterSpacing: -0.5,
+                  ),
+                ),
             ],
           ),
-          const SizedBox(height: 8),
-          Text('Indoor model aktif', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
-          const SizedBox(height: 4),
-          Text('Veri kaynakları: sıcaklık, nem, CO₂ sensörleri • FastAPI backend • PyTorch modelleri',
-              style: theme.textTheme.bodySmall?.copyWith(color: Colors.white54)),
-          const SizedBox(height: 16),
-          Text('API Sunucu Adresi', style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60)),
-          const SizedBox(height: 6),
-          GlassContainer(
-            colorOpacity: 0.12,
-            borderRadius: 12,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Text(baseUrl, style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white70)),
+        ),
+      ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: badgeStyle['bg'] as Color,
+                        borderRadius: BorderRadius.circular(100),
+                        border: Border.all(color: badgeStyle['border'] as Color),
+                ),
+                      child: Text(
+                        status.label,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: badgeStyle['text'] as Color,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+          ],
+        ),
+        const SizedBox(height: 12),
+                Text(
+                  range,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.textSecondary,
+                        fontSize: 11,
+          ),
+        ),
+      ],
+            ),
           ),
         ],
       ),

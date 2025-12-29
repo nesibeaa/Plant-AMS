@@ -12,3 +12,4 @@ python-jose[cryptography]
 passlib[bcrypt]
 python-dotenv
 opencv-python-headless
+httpx

@@ -49,5 +49,29 @@
 	<string>Bitki analizi için fotoğraf çekmek için kamera erişimi gereklidir</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Bitki analizi için galeriden fotoğraf seçmek için galeri erişimi gereklidir</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Bitki fotoğraflarını kaydetmek için galeri erişimi gereklidir</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>localhost</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+			<key>127.0.0.1</key>
+			<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+			</dict>
+		</dict>
+	</dict>
 </dict>
 </plist>

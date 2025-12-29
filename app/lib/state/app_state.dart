@@ -23,6 +23,7 @@ class AppState extends ChangeNotifier {
   LatestReadings? latest;
   List<SensorPoint> tempSeries = [], humiditySeries = [], co2Series = [];
   List<Map<String, dynamic>> alerts = [];
+  Set<String> readAlertIds = {}; // Okunmuş bildirim ID'leri
   Map<String, Map<String, dynamic>> actuators = {
     'fan': {'mode': 'auto', 'state': 'off', 'last_change': null},
     'heater': {'mode': 'auto', 'state': 'off', 'last_change': null},
@@ -30,6 +31,17 @@ class AppState extends ChangeNotifier {
   };
   bool loading = false;
   String? error;
+  
+  void markAlertsAsRead() {
+    // Tüm mevcut bildirimleri okundu olarak işaretle
+    for (final alert in alerts) {
+      final id = alert['id']?.toString() ?? alert['ts']?.toString() ?? '';
+      if (id.isNotEmpty) {
+        readAlertIds.add(id);
+      }
+    }
+    notifyListeners();
+  }
 
   AppState() {
     // Otomatik yenileme başlat (her 1 dakikada bir)
@@ -81,7 +93,12 @@ class AppState extends ChangeNotifier {
         debugPrint('Actuator fetch error: $e');
       }
       
-      alerts = await _buildAlerts();
+      final newAlerts = await _buildAlerts();
+      // Yeni gelen bildirimlerin ID'lerini kontrol et, okunmamış olanları koru
+      final existingIds = readAlertIds.toSet();
+      alerts = newAlerts;
+      // Mevcut ID'leri koru (yeni bildirimler otomatik okunmamış olur)
+      readAlertIds = existingIds;
       
       // Debug: veri sayısını kontrol et
       print('Loaded series - temp: ${tempSeries.length}, humidity: ${humiditySeries.length}, co2: ${co2Series.length}');

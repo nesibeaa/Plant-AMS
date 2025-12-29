@@ -106,8 +106,8 @@ class _RegisterPageState extends State<RegisterPage> {
                       borderRadius: BorderRadius.circular(20),
                       gradient: LinearGradient(
                         colors: [
-                          AppColors.cyan,
-                          AppColors.cyan.withOpacity(0.7),
+                          AppColors.primary,
+                          AppColors.primary.withOpacity(0.7),
                         ],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
@@ -288,7 +288,7 @@ class _RegisterPageState extends State<RegisterPage> {
                           ElevatedButton(
                             onPressed: _isLoading ? null : _handleRegister,
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.cyan,
+                              backgroundColor: AppColors.primary,
                               foregroundColor: Colors.black,
                               padding: const EdgeInsets.symmetric(vertical: 16),
                               shape: RoundedRectangleBorder(
@@ -333,7 +333,7 @@ class _RegisterPageState extends State<RegisterPage> {
                         child: Text(
                           'Giriş Yap',
                           style: theme.textTheme.bodyMedium?.copyWith(
-                            color: AppColors.cyan,
+                            color: AppColors.primary,
                             fontWeight: FontWeight.w600,
                           ),
                         ),

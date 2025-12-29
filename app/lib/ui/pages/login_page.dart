@@ -86,8 +86,8 @@ class _LoginPageState extends State<LoginPage> {
                       borderRadius: BorderRadius.circular(20),
                       gradient: LinearGradient(
                         colors: [
-                          AppColors.cyan,
-                          AppColors.cyan.withOpacity(0.7),
+                          AppColors.primary,
+                          AppColors.primary.withOpacity(0.7),
                         ],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
@@ -212,7 +212,7 @@ class _LoginPageState extends State<LoginPage> {
                           ElevatedButton(
                             onPressed: _isLoading ? null : _handleLogin,
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.cyan,
+                              backgroundColor: AppColors.primary,
                               foregroundColor: Colors.black,
                               padding: const EdgeInsets.symmetric(vertical: 16),
                               shape: RoundedRectangleBorder(
@@ -257,7 +257,7 @@ class _LoginPageState extends State<LoginPage> {
                         child: Text(
                           'Kayıt Ol',
                           style: theme.textTheme.bodyMedium?.copyWith(
-                            color: AppColors.cyan,
+                            color: AppColors.primary,
                             fontWeight: FontWeight.w600,
                           ),
                         ),

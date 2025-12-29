@@ -21,13 +21,14 @@ from passlib.context import CryptContext
 import bcrypt
 from dotenv import load_dotenv
 from pathlib import Path
+import httpx
 
 # .env dosyasını yükle (backend dizininden)
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
-from .plant_classifier import PlantClassifier
-from .plantvillage_classifier import PlantVillageClassifier
+from plant_classifier import PlantClassifier
+from plantvillage_classifier import PlantVillageClassifier
 
 
 from sqlmodel import SQLModel, Field, create_engine, Session, select
@@ -886,6 +887,191 @@ def ingest(r: ReadingIn):
         # Hata olsa bile 200 dön (simulate.py için)
         return {"ok": False, "error": str(e)}
 
+@app.get("/api/v1/weather")
+async def get_weather(city: str = "Istanbul", country_code: str = "TR", lat: Optional[float] = None, lon: Optional[float] = None):
+    """
+    Hava durumu bilgilerini döner (Open-Meteo API kullanır - ücretsiz, API key gerektirmez)
+    city: Şehir adı (default: Istanbul) - koordinat yoksa kullanılır
+    country_code: Ülke kodu (default: TR)
+    lat: Enlem (opsiyonel, varsa direkt kullanılır)
+    lon: Boylam (opsiyonel, varsa direkt kullanılır)
+    """
+    # Eğer koordinat verilmişse direkt kullan
+    if lat is not None and lon is not None:
+        coords = {"lat": lat, "lon": lon}
+        city_name = city  # Şehir adını parametre olarak kullan
+    else:
+        # Şehir adından koordinat bulmak için Open-Meteo Geocoding API kullan
+        try:
+            geocoding_url = "https://geocoding-api.open-meteo.com/v1/search"
+            geocoding_params = {
+                "name": city,
+                "count": 1,
+                "language": "tr",
+                "format": "json",
+            }
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                geo_response = await client.get(geocoding_url, params=geocoding_params)
+                geo_response.raise_for_status()
+                geo_data = geo_response.json()
+            
+            if geo_data.get("results") and len(geo_data["results"]) > 0:
+                result = geo_data["results"][0]
+                coords = {"lat": result["latitude"], "lon": result["longitude"]}
+                city_name = result.get("name", city)  # API'den gelen şehir adı
+            else:
+                # Geocoding başarısız, default Istanbul kullan
+                coords = {"lat": 41.0082, "lon": 28.9784}
+                city_name = "Istanbul"
+        except Exception as e:
+            print(f"Geocoding error: {e}")
+            # Hata durumunda default Istanbul kullan
+            coords = {"lat": 41.0082, "lon": 28.9784}
+            city_name = "Istanbul"
+    
+    try:
+        # Open-Meteo API - tamamen ücretsiz, API key gerektirmez
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": coords["lat"],
+            "longitude": coords["lon"],
+            "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,apparent_temperature",
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+            "timezone": "Europe/Istanbul",
+            "forecast_days": 7,  # 7 günlük tahmin
+        }
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+        
+        current = data["current"]
+        temp = current["temperature_2m"]
+        feels_like = current["apparent_temperature"]
+        humidity = current["relative_humidity_2m"]
+        wind_speed = current["wind_speed_10m"]
+        weather_code = int(current["weather_code"])
+        
+        # WMO Weather interpretation codes (WW) -> Türkçe açıklama
+        weather_codes = {
+            0: "Açık",
+            1: "Çoğunlukla açık",
+            2: "Kısmen bulutlu",
+            3: "Kapalı",
+            45: "Sisli",
+            48: "Donan sisli",
+            51: "Hafif çiseleyen yağmur",
+            53: "Orta çiseleyen yağmur",
+            55: "Yoğun çiseleyen yağmur",
+            56: "Hafif donan çiseleme",
+            57: "Yoğun donan çiseleme",
+            61: "Hafif yağmur",
+            63: "Orta yağmur",
+            65: "Yoğun yağmur",
+            66: "Hafif donan yağmur",
+            67: "Yoğun donan yağmur",
+            71: "Hafif kar",
+            73: "Orta kar",
+            75: "Yoğun kar",
+            77: "Kar taneleri",
+            80: "Hafif sağanak",
+            81: "Orta sağanak",
+            82: "Yoğun sağanak",
+            85: "Hafif kar sağanağı",
+            86: "Yoğun kar sağanağı",
+            95: "Fırtına",
+            96: "Dolu ile fırtına",
+            99: "Şiddetli dolu ile fırtına",
+        }
+        
+        description = weather_codes.get(weather_code, "Bilinmiyor")
+        
+        # Icon seçimi (basit mapping)
+        if weather_code in [0, 1]:
+            icon = "clear"
+        elif weather_code in [2, 3]:
+            icon = "clouds"
+        elif weather_code in [45, 48]:
+            icon = "mist"
+        elif weather_code in range(51, 68):
+            icon = "rain"
+        elif weather_code in range(71, 78):
+            icon = "snow"
+        elif weather_code in range(80, 83):
+            icon = "rain"
+        elif weather_code in range(95, 100):
+            icon = "thunderstorm"
+        else:
+            icon = "clouds"
+        
+        # Haftalık tahmin verilerini al
+        daily_forecast = []
+        if "daily" in data:
+            daily = data["daily"]
+            daily_codes = daily.get("weather_code", [])
+            daily_max = daily.get("temperature_2m_max", [])
+            daily_min = daily.get("temperature_2m_min", [])
+            daily_time = daily.get("time", [])
+            
+            for i in range(min(7, len(daily_codes))):
+                day_code = int(daily_codes[i])
+                day_description = weather_codes.get(day_code, "Bilinmiyor")
+                
+                # Icon seçimi
+                if day_code in [0, 1]:
+                    day_icon = "clear"
+                elif day_code in [2, 3]:
+                    day_icon = "clouds"
+                elif day_code in [45, 48]:
+                    day_icon = "mist"
+                elif day_code in range(51, 68):
+                    day_icon = "rain"
+                elif day_code in range(71, 78):
+                    day_icon = "snow"
+                elif day_code in range(80, 83):
+                    day_icon = "rain"
+                elif day_code in range(95, 100):
+                    day_icon = "thunderstorm"
+                else:
+                    day_icon = "clouds"
+                
+                daily_forecast.append({
+                    "date": daily_time[i] if i < len(daily_time) else "",
+                    "max_temp": round(daily_max[i], 1) if i < len(daily_max) else 0.0,
+                    "min_temp": round(daily_min[i], 1) if i < len(daily_min) else 0.0,
+                    "weather_code": day_code,
+                    "description": day_description,
+                    "icon": day_icon,
+                })
+        
+        return {
+            "temp": round(temp, 1),
+            "feels_like": round(feels_like, 1),
+            "humidity": int(humidity),
+            "wind_speed": round(wind_speed * 3.6, 1),  # m/s'den km/h'ye çevir
+            "description": description,
+            "icon": icon,
+            "weather_code": weather_code,  # Frontend'de ikon seçimi için
+            "city": city_name,
+            "country": country_code,
+            "forecast": daily_forecast,  # 7 günlük tahmin
+        }
+    except Exception as e:
+        print(f"Weather API error: {e}")
+        # Hata durumunda mock data dön
+        return {
+            "temp": 23.0,
+            "feels_like": 24.0,
+            "humidity": 52,
+            "wind_speed": 8.0,
+            "description": "Parçalı bulutlu",
+            "icon": "clouds",
+            "weather_code": 2,
+            "city": city,
+            "country": country_code,
+            "forecast": [],  # Mock data'da tahmin yok
+        }
 
 @app.get("/api/v1/latest")
 def latest():

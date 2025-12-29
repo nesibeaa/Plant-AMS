@@ -13,6 +13,7 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController _controller;
+  late final TextEditingController _groqApiKeyController;
   bool _notificationsCritical = true;
   bool _notificationsWarnings = false;
   bool _notificationsAnalysis = true;
@@ -21,11 +22,21 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     _controller = TextEditingController(text: AppConfig.baseUrl);
+    _groqApiKeyController = TextEditingController();
+    _loadGroqApiKey();
+  }
+
+  Future<void> _loadGroqApiKey() async {
+    await AppConfig.load();
+    setState(() {
+      _groqApiKeyController.text = AppConfig.groqApiKey;
+    });
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _groqApiKeyController.dispose();
     super.dispose();
   }
 

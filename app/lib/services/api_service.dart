@@ -38,6 +38,12 @@ class ApiService {
     return LatestReadings.fromJson(jsonDecode(r.body));
   }
 
+  Future<Map<String, dynamic>> getWeather({String city = "Istanbul", String countryCode = "TR"}) async {
+    final r = await _client.get(_u('/api/v1/weather', {'city': city, 'country_code': countryCode}));
+    if (r.statusCode != 200) throw Exception('getWeather ${r.statusCode}');
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
   Future<List<SensorPoint>> getSeries({
     required String sensor, String bucket='hourly', int hours=24, int days=7,
   }) async {
