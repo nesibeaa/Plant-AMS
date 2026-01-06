@@ -1,20 +1,28 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 import '../models/sensor_reading.dart';
+import '../models/plant_thresholds.dart';
 import '../services/api_service.dart';
+import '../services/notification_service.dart';
 import 'auth_state.dart';
 
 class AppState extends ChangeNotifier {
   final api = ApiService();
+  final _notificationService = NotificationService();
   Timer? _refreshTimer;
   Timer? _quickRefreshTimer;
   
-  // AuthState'i inject et (main.dart'tan set edilecek)
+  // AuthState inject 
   AuthState? _authState;
+  
+  
+  final Map<String, DateTime> _lastNotificationTime = {};
   
   void setAuthState(AuthState authState) {
     _authState = authState;
-    // Token geçersiz olduğunda otomatik logout
+    
     api.onUnauthorized = () {
       _authState?.logout();
     };
@@ -33,7 +41,7 @@ class AppState extends ChangeNotifier {
   String? error;
   
   void markAlertsAsRead() {
-    // Tüm mevcut bildirimleri okundu olarak işaretle
+    
     for (final alert in alerts) {
       final id = alert['id']?.toString() ?? alert['ts']?.toString() ?? '';
       if (id.isNotEmpty) {
@@ -93,6 +101,11 @@ class AppState extends ChangeNotifier {
         debugPrint('Actuator fetch error: $e');
       }
       
+      // Bitki eşik kontrollerini yap ve bildirim gönder
+      if (latest != null) {
+        await _checkPlantThresholds(latest!);
+      }
+      
       final newAlerts = await _buildAlerts();
       // Yeni gelen bildirimlerin ID'lerini kontrol et, okunmamış olanları koru
       final existingIds = readAlertIds.toSet();
@@ -131,15 +144,35 @@ class AppState extends ChangeNotifier {
     final alertsList = (await api.getAlerts(limit: 20)).map(_localizeAlert).toList();
     final actuatorHistory = await api.getActuatorHistory(limit: 20);
     final actuatorAlerts = actuatorHistory.map(_mapActuatorEventToAlert).toList();
+    
+    // Local alert'leri oku (bitki bakım ve optimal değer bildirimleri)
+    final localAlerts = await _loadLocalAlerts();
 
-    final allAlerts = [...alertsList, ...actuatorAlerts];
+    final allAlerts = [...alertsList, ...actuatorAlerts, ...localAlerts];
     allAlerts.sort((a, b) {
       final aTime = DateTime.parse(a['ts'] as String);
       final bTime = DateTime.parse(b['ts'] as String);
       return bTime.compareTo(aTime);
     });
 
-    return allAlerts.take(10).toList();
+    return allAlerts.take(20).toList(); // 20'ye çıkardık çünkü local alert'ler de var
+  }
+
+  // Local alert'leri SharedPreferences'tan yükle
+  Future<List<Map<String, dynamic>>> _loadLocalAlerts() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final alertsJson = prefs.getString('local_alerts') ?? '[]';
+      return List<Map<String, dynamic>>.from(
+        jsonDecode(alertsJson) as List,
+      ).map((alert) {
+        // Localize et (eğer gerekirse)
+        return _localizeAlert(alert);
+      }).toList();
+    } catch (e) {
+      debugPrint('Local alert yükleme hatası: $e');
+      return [];
+    }
   }
 
   Map<String, dynamic> _mapActuatorEventToAlert(Map<String, dynamic> event) {
@@ -294,5 +327,77 @@ class AppState extends ChangeNotifier {
         debugPrint('Quick refresh error: $e');
       }
     });
+  }
+
+  // Bitki eşik aralıklarını kontrol et ve bildirim gönder
+  Future<void> _checkPlantThresholds(LatestReadings readings) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final plantsJson = prefs.getString('saved_plants') ?? '[]';
+      final plants = List<Map<String, dynamic>>.from(
+        jsonDecode(plantsJson) as List,
+      );
+
+      final now = DateTime.now();
+      const notificationCooldown = Duration(minutes: 5); // 5 dakika içinde aynı bildirimi tekrar gönderme
+
+      for (final plant in plants) {
+        final plantId = plant['id']?.toString() ?? '';
+        final plantName = plant['name']?.toString() ?? plant['plantType']?.toString() ?? 'Bilinmeyen Bitki';
+        // Bitki türünü plantType veya originalPlantType'dan al (species değil)
+        final plantType = plant['plantType']?.toString() ?? plant['originalPlantType']?.toString() ?? 'Unknown';
+
+        if (plantId.isEmpty) continue;
+
+        final thresholds = PlantThresholds.forPlantType(plantType);
+
+        // Sıcaklık kontrolü
+        if (thresholds.isTempOutOfRange(readings.temp)) {
+          final key = '${plantId}_temp';
+          final lastTime = _lastNotificationTime[key];
+          if (lastTime == null || now.difference(lastTime) > notificationCooldown) {
+            await _notificationService.sendThresholdAlertNotification(
+              plantName: plantName,
+              sensorType: 'temp',
+              value: readings.temp,
+              unit: '°C',
+            );
+            _lastNotificationTime[key] = now;
+          }
+        }
+
+        // Nem kontrolü
+        if (thresholds.isHumidityOutOfRange(readings.humidity)) {
+          final key = '${plantId}_humidity';
+          final lastTime = _lastNotificationTime[key];
+          if (lastTime == null || now.difference(lastTime) > notificationCooldown) {
+            await _notificationService.sendThresholdAlertNotification(
+              plantName: plantName,
+              sensorType: 'humidity',
+              value: readings.humidity,
+              unit: '%',
+            );
+            _lastNotificationTime[key] = now;
+          }
+        }
+
+        // CO2 kontrolü
+        if (thresholds.isCo2OutOfRange(readings.co2)) {
+          final key = '${plantId}_co2';
+          final lastTime = _lastNotificationTime[key];
+          if (lastTime == null || now.difference(lastTime) > notificationCooldown) {
+            await _notificationService.sendThresholdAlertNotification(
+              plantName: plantName,
+              sensorType: 'co2',
+              value: readings.co2,
+              unit: ' ppm',
+            );
+            _lastNotificationTime[key] = now;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Bitki eşik kontrolü hatası: $e');
+    }
   }
 }

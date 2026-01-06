@@ -70,7 +70,7 @@ async def add_no_cache_headers(request, call_next):
 # ----------------- CORS ------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # demo için açık
+    allow_origins=["*"],   
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -93,25 +93,25 @@ def iso_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 # ----------------- DB --------------------------------------------------------
-# SQLite için thread-safe ve WAL mode ayarları
+# SQLite thread-safe, WAL mode 
 engine = create_engine(
     "sqlite:///./app.db",
     echo=False,
     connect_args={
         "check_same_thread": False,  # Thread-safe
-        "timeout": 20.0,  # Connection timeout (saniye)
+        "timeout": 20.0,  # Connection timeout 
     },
-    pool_pre_ping=True,  # Bağlantı sağlığını kontrol et
-    pool_size=10,  # Connection pool size
-    max_overflow=20,  # Max overflow connections
+    pool_pre_ping=True,  
+    pool_size=10,  
+    max_overflow=20,  
 )
-# SQLite WAL mode'u etkinleştir (aynı anda okuma/yazma)
+
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=NORMAL")
-    cursor.execute("PRAGMA busy_timeout=30000")  # 30 saniye busy timeout
+    cursor.execute("PRAGMA busy_timeout=30000")  
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.close()
 
@@ -120,7 +120,7 @@ class ReadingDB(SQLModel, table=True):
     sensor_id: str
     type: str
     value: float
-    ts: datetime  # timezone-aware datetime yazacağız
+    ts: datetime  
 
 class ActuatorEventDB(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
@@ -137,7 +137,7 @@ class AlertDB(SQLModel, table=True):
     level: str
     source: str
     message: str
-    ts: datetime  # timezone-aware datetime yazacağız
+    ts: datetime  
 
 class UserDB(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
@@ -153,31 +153,30 @@ def on_startup():
     SQLModel.metadata.create_all(engine)
 
 # ----------------- AUTHENTICATION -------------------------------------------
-# SECRET_KEY environment variable'dan al, yoksa güvenli bir key oluştur (sadece development için)
+
 SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
-    # Development modunda: otomatik güvenli key oluştur (her restart'ta değişir)
-    # Production'da MUTLAKA environment variable kullan!
+    
     SECRET_KEY = secrets.token_urlsafe(32)
     print("⚠️  WARNING: SECRET_KEY environment variable bulunamadı!")
     print("⚠️  Development modunda otomatik key oluşturuldu (her restart'ta değişir)")
     print("⚠️  Production için: export SECRET_KEY='your-secret-key-here'")
     
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 gün
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  
 
 security = HTTPBearer()
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Şifreyi doğrula - bcrypt direkt kullan"""
     try:
-        # Bcrypt 72 byte limit - şifreyi encode et ve sınırla
+        
         password_bytes = plain_password.encode('utf-8')
         if len(password_bytes) > 72:
             password_bytes = password_bytes[:72]
             plain_password = password_bytes.decode('utf-8', errors='ignore')
         
-        # Bcrypt hash'i bytes'a çevir
+        
         if isinstance(hashed_password, str):
             hashed_password_bytes = hashed_password.encode('utf-8')
         else:
@@ -189,12 +188,12 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     """Şifreyi hash'le - bcrypt direkt kullan"""
-    # Bcrypt 72 byte limit kontrolü
+    
     password_bytes = password.encode('utf-8')
     if len(password_bytes) > 72:
         raise ValueError("Şifre çok uzun (maksimum 72 karakter)")
     
-    # Bcrypt ile hash'le (12 rounds)
+    
     salt = bcrypt.gensalt(rounds=12)
     hashed = bcrypt.hashpw(password_bytes, salt)
     return hashed.decode('utf-8')
@@ -223,7 +222,7 @@ async def get_current_user(
         user_id_str = payload.get("sub")
         if user_id_str is None:
             raise credentials_exception
-        # JWT'den gelen string'i integer'a çevir
+        
         try:
             user_id: int = int(user_id_str)
         except (ValueError, TypeError):
@@ -248,12 +247,7 @@ async def get_current_active_user(
 READINGS: Deque[dict] = deque(maxlen=5000)
 ALERTS:   Deque[dict] = deque(maxlen=1000)
 
-# ----------------- Eşikler / Fan --------------------------------------------
-THRESHOLDS = {
-    "temp":     {"min": 16.0, "max": 26.0},
-    "humidity": {"min": 45.0, "max": 80.0},
-    "co2":      {"max": 1200.0},
-}
+# Eşikler kaldırıldı - artık bitki bazlı eşikler kullanılıyor (frontend'de)
 LOW_CONFIDENCE_THRESHOLD = 0.5  # Düşük güven skorları için daha hassas uyarı
 
 CLASS_INFO: Dict[str, Dict[str, Any]] = {
@@ -546,7 +540,7 @@ def register(user_data: UserRegister):
                 detail="Email already registered"
             )
         
-        # Username kontrolü
+        
         existing_username = s.exec(select(UserDB).where(UserDB.username == user_data.username)).first()
         if existing_username:
             raise HTTPException(
@@ -554,7 +548,7 @@ def register(user_data: UserRegister):
                 detail="Username already taken"
             )
         
-        # Şifre hash'leme (validation zaten yapıldı)
+        
         try:
             hashed_password = get_password_hash(user_data.password)
         except ValueError as e:
@@ -574,7 +568,7 @@ def register(user_data: UserRegister):
         s.commit()
         s.refresh(new_user)
         
-        # Token oluştur (JWT'de sub string olmalı)
+        # Token 
         access_token = create_access_token(data={"sub": str(new_user.id)})
         
         return {
@@ -648,13 +642,13 @@ def get_current_user_info(current_user: UserDB = Depends(get_current_active_user
 @app.post("/api/v1/ingest")
 def ingest(r: ReadingIn):
     """
-    Sensör verisini alır, DB'ye yazar (UTC aware), eşikleri kontrol eder,
-    gerekli uyarıyı üretir ve fan otomasyonunu yönetir.
+    Sensör verisini alır ve DB'ye yazar (UTC aware).
+    Eşik kontrolleri artık frontend'de bitki bazlı yapılıyor.
     """
     try:
         ts_utc = to_utc(r.ts)
 
-        # In-memory log (Z'li string)
+        # In-memory log 
         READINGS.append({
             "sensor_id": r.sensor_id,
             "type": r.type,
@@ -662,9 +656,9 @@ def ingest(r: ReadingIn):
             "ts": iso_z(ts_utc),
         })
 
-        # DB: reading insert (aware datetime) - retry logic ile
+        # DB: reading insert (aware datetime) - retry logic
         db_success = False
-        for attempt in range(3):  # 3 deneme
+        for attempt in range(3):  
             try:
                 with Session(engine) as s:
                     s.add(ReadingDB(
@@ -677,206 +671,14 @@ def ingest(r: ReadingIn):
                 db_success = True
                 break
             except Exception as db_err:
-                if attempt < 2:  # Son deneme değilse bekle
+                if attempt < 2:  
                     import time
-                    time.sleep(0.1 * (attempt + 1))  # Kademeli bekleme
+                    time.sleep(0.1 * (attempt + 1))  
                 else:
-                    # Son deneme de başarısız - sessizce devam et
+                    
                     pass
 
-        # Eşik kontrolü
-        th = THRESHOLDS.get(r.type, {})
-        if r.type in ("temp", "humidity"):
-            if "min" not in th or "max" not in th:
-                out = False
-            else:
-                out = not (th["min"] <= r.value <= th["max"])
-        elif r.type == "co2":
-            if "max" not in th:
-                out = False
-            else:
-                out = r.value > th["max"]
-        else:
-            out = False
-
-        if out:
-            # --- WARN ALERT ---
-            msg = f"{r.type} out of range: {r.value}"
-            ALERTS.append({
-                "level": "warn",
-                "source": "threshold",
-                "message": msg,
-                "ts": iso_z(utcnow()),
-            })
-            try:
-                with Session(engine) as s:
-                    s.add(AlertDB(level="warn", source="threshold", message=msg, ts=utcnow()))
-                    s.commit()
-            except Exception as db_err:
-                print(f"Alert DB insert error: {db_err}")
-
-            # Normal okuma sayaçlarını sıfırla
-            for key in NORMAL_OK_STREAK:
-                NORMAL_OK_STREAK[key] = 0
-
-            # --- FAN AUTO → ON (CO2 eşiği aşıldıysa) ---
-            if r.type == "co2" and FAN["mode"] == "auto" and FAN["state"] == "off":
-                FAN["state"] = "on"
-                FAN["last_change"] = iso_z(utcnow())
-                try:
-                    with Session(engine) as s:
-                        s.add(ActuatorEventDB(
-                            device="fan",
-                            action="on",
-                            reason="automation",
-                            mode=FAN["mode"],
-                            state=FAN["state"],
-                            ts=utcnow(),
-                        ))
-                        s.commit()
-                except Exception as db_err:
-                    print(f"ActuatorEvent DB insert error: {db_err}")
-
-            # --- HEATER AUTO → ON (Sıcaklık eşiği altındaysa) ---
-            if r.type == "temp" and HEATER["mode"] == "auto" and HEATER["state"] == "off":
-                temp_th = THRESHOLDS.get("temp", {})
-                if "min" in temp_th and r.value < temp_th["min"]:
-                    HEATER["state"] = "on"
-                    HEATER["last_change"] = iso_z(utcnow())
-                    try:
-                        with Session(engine) as s:
-                            s.add(ActuatorEventDB(
-                                device="heater",
-                                action="on",
-                                reason="automation",
-                                mode=HEATER["mode"],
-                                state=HEATER["state"],
-                                ts=utcnow(),
-                            ))
-                            s.commit()
-                    except Exception as db_err:
-                        print(f"ActuatorEvent DB insert error: {db_err}")
-
-            # --- HUMIDIFIER AUTO → ON (Nem eşiği altındaysa) ---
-            if r.type == "humidity" and HUMIDIFIER["mode"] == "auto" and HUMIDIFIER["state"] == "off":
-                hum_th = THRESHOLDS.get("humidity", {})
-                if "min" in hum_th and r.value < hum_th["min"]:
-                    HUMIDIFIER["state"] = "on"
-                    HUMIDIFIER["last_change"] = iso_z(utcnow())
-                    try:
-                        with Session(engine) as s:
-                            s.add(ActuatorEventDB(
-                                device="humidifier",
-                                action="on",
-                                reason="automation",
-                                mode=HUMIDIFIER["mode"],
-                                state=HUMIDIFIER["state"],
-                                ts=utcnow(),
-                            ))
-                            s.commit()
-                    except Exception as db_err:
-                        print(f"ActuatorEvent DB insert error: {db_err}")
-
-        else:
-            # --- NORMAL OKUMA ---
-            if r.type == "co2":
-                NORMAL_OK_STREAK["fan"] += 1
-                if FAN["mode"] == "auto" and FAN["state"] == "on" and NORMAL_OK_STREAK["fan"] >= NORMAL_OK_TARGET:
-                    FAN["state"] = "off"
-                    FAN["last_change"] = iso_z(utcnow())
-                    info_msg = f"fan auto-off after {NORMAL_OK_STREAK['fan']} normal readings"
-                    ALERTS.append({
-                        "level": "info",
-                        "source": "automation",
-                        "message": info_msg,
-                        "ts": iso_z(utcnow()),
-                    })
-                    try:
-                        with Session(engine) as s:
-                            s.add(AlertDB(level="info", source="automation", message=info_msg, ts=utcnow()))
-                            s.commit()
-                    except Exception as db_err:
-                        print(f"Alert DB insert error: {db_err}")
-                    try:
-                        with Session(engine) as s:
-                            s.add(ActuatorEventDB(
-                                device="fan",
-                                action="off",
-                                reason="automation",
-                                mode=FAN["mode"],
-                                state=FAN["state"],
-                                ts=utcnow(),
-                            ))
-                            s.commit()
-                    except Exception as db_err:
-                        print(f"ActuatorEvent DB insert error: {db_err}")
-                    NORMAL_OK_STREAK["fan"] = 0
-
-            elif r.type == "temp":
-                NORMAL_OK_STREAK["heater"] += 1
-                if HEATER["mode"] == "auto" and HEATER["state"] == "on" and NORMAL_OK_STREAK["heater"] >= NORMAL_OK_TARGET:
-                    HEATER["state"] = "off"
-                    HEATER["last_change"] = iso_z(utcnow())
-                    info_msg = f"heater auto-off after {NORMAL_OK_STREAK['heater']} normal readings"
-                    ALERTS.append({
-                        "level": "info",
-                        "source": "automation",
-                        "message": info_msg,
-                        "ts": iso_z(utcnow()),
-                    })
-                    try:
-                        with Session(engine) as s:
-                            s.add(AlertDB(level="info", source="automation", message=info_msg, ts=utcnow()))
-                            s.commit()
-                    except Exception as db_err:
-                        print(f"Alert DB insert error: {db_err}")
-                    try:
-                        with Session(engine) as s:
-                            s.add(ActuatorEventDB(
-                                device="heater",
-                                action="off",
-                                reason="automation",
-                                mode=HEATER["mode"],
-                                state=HEATER["state"],
-                                ts=utcnow(),
-                            ))
-                            s.commit()
-                    except Exception as db_err:
-                        print(f"ActuatorEvent DB insert error: {db_err}")
-                    NORMAL_OK_STREAK["heater"] = 0
-
-            elif r.type == "humidity":
-                NORMAL_OK_STREAK["humidifier"] += 1
-                if HUMIDIFIER["mode"] == "auto" and HUMIDIFIER["state"] == "on" and NORMAL_OK_STREAK["humidifier"] >= NORMAL_OK_TARGET:
-                    HUMIDIFIER["state"] = "off"
-                    HUMIDIFIER["last_change"] = iso_z(utcnow())
-                    info_msg = f"humidifier auto-off after {NORMAL_OK_STREAK['humidifier']} normal readings"
-                    ALERTS.append({
-                        "level": "info",
-                        "source": "automation",
-                        "message": info_msg,
-                        "ts": iso_z(utcnow()),
-                    })
-                    try:
-                        with Session(engine) as s:
-                            s.add(AlertDB(level="info", source="automation", message=info_msg, ts=utcnow()))
-                            s.commit()
-                    except Exception as db_err:
-                        print(f"Alert DB insert error: {db_err}")
-                    try:
-                        with Session(engine) as s:
-                            s.add(ActuatorEventDB(
-                                device="humidifier",
-                                action="off",
-                                reason="automation",
-                                mode=HUMIDIFIER["mode"],
-                                state=HUMIDIFIER["state"],
-                                ts=utcnow(),
-                            ))
-                            s.commit()
-                    except Exception as db_err:
-                        print(f"ActuatorEvent DB insert error: {db_err}")
-                    NORMAL_OK_STREAK["humidifier"] = 0
+        
 
         return {"ok": True}
     
@@ -884,7 +686,7 @@ def ingest(r: ReadingIn):
         import traceback
         error_msg = f"Ingest error: {str(e)}\n{traceback.format_exc()}"
         print(error_msg)
-        # Hata olsa bile 200 dön (simulate.py için)
+        
         return {"ok": False, "error": str(e)}
 
 @app.get("/api/v1/weather")
@@ -1449,7 +1251,7 @@ async def analyze_plant(
                 },
             )
 
-        # PlantVillage modeli için özel işleme
+        
         is_plantvillage = False
         plantvillage_result = None
         for result in model_results:
@@ -1458,7 +1260,7 @@ async def analyze_plant(
                 plantvillage_result = result
                 break
 
-        # En yüksek güven skoruna sahip tahmini seç
+        
         best = max(model_results, key=lambda r: float(r["confidence"]))
         best_class_name = best["class_name"]
         primary_confidence = float(best["confidence"])

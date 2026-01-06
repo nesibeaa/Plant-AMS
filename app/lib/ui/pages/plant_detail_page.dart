@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:convert';
@@ -10,13 +11,15 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import '../theme/app_theme.dart';
 import 'plant_scan_page.dart';
 import '../../services/api_service.dart';
+import '../../services/notification_service.dart';
 import '../../core/config.dart';
 import 'package:intl/intl.dart';
 
 class PlantDetailPage extends StatefulWidget {
   final Map<String, dynamic> plant;
+  final int initialTab;
 
-  const PlantDetailPage({super.key, required this.plant});
+  const PlantDetailPage({super.key, required this.plant, this.initialTab = 0});
 
   @override
   State<PlantDetailPage> createState() => _PlantDetailPageState();
@@ -30,11 +33,20 @@ class _PlantDetailPageState extends State<PlantDetailPage> with SingleTickerProv
   bool _analyzing = false;
   final ImagePicker _picker = ImagePicker();
   final ApiService _apiService = ApiService();
+  final NotificationService _notificationService = NotificationService();
+  
+  // Bildirim durumları
+  Map<String, dynamic>? _wateringNotificationSettings;
+  Map<String, dynamic>? _fertilizationNotificationSettings;
+  
+  // Son sulama ve gübreleme tarihleri
+  DateTime? _lastWateringDate;
+  DateTime? _lastFertilizationDate;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 3, vsync: this, initialIndex: widget.initialTab);
     _loadPlantData();
   }
 
@@ -56,22 +68,84 @@ class _PlantDetailPageState extends State<PlantDetailPage> with SingleTickerProv
         jsonDecode(historyJson) as List
       );
       
+      // Bildirim ayarlarını yükle
+      final wateringSettings = await _notificationService.getNotificationSettings(plantId, 'watering');
+      final fertilizationSettings = await _notificationService.getNotificationSettings(plantId, 'fertilization');
+      
+      // Son sulama ve gübreleme tarihlerini yükle
+      final lastWateringStr = prefs.getString('last_watering_$plantId');
+      final lastFertilizationStr = prefs.getString('last_fertilization_$plantId');
+      
       setState(() {
         _analysisHistory = history;
         // En son analiz sonucunu al
         if (_analysisHistory.isNotEmpty) {
           _currentAnalysisResult = _analysisHistory.first;
         }
+        _wateringNotificationSettings = wateringSettings;
+        _fertilizationNotificationSettings = fertilizationSettings;
+        _lastWateringDate = lastWateringStr != null ? DateTime.parse(lastWateringStr) : null;
+        _lastFertilizationDate = lastFertilizationStr != null ? DateTime.parse(lastFertilizationStr) : null;
         _isLoading = false;
       });
+      
+      // Debug: Ayarları kontrol et
+      print('📋 Yüklenen ayarlar:');
+      print('   Sulama: ${wateringSettings != null ? "Var (enabled: ${wateringSettings['enabled']})" : "Yok"}');
+      print('   Gübreleme: ${fertilizationSettings != null ? "Var (enabled: ${fertilizationSettings['enabled']})" : "Yok"}');
+      print('   Son sulama: $_lastWateringDate');
+      print('   Son gübreleme: $_lastFertilizationDate');
     } catch (e) {
+      print('❌ Plant data yükleme hatası: $e');
       setState(() => _isLoading = false);
     }
   }
 
   Future<void> _addNewPhoto() async {
+    // Kullanıcıya kamera veya galeri seçeneği sun
+    final ImageSource? source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: BoxDecoration(
+          color: AppColors.cardBackground,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: const Icon(Icons.camera_alt, color: AppColors.primary),
+                title: const Text('Kamera ile Çek'),
+                onTap: () => Navigator.of(context).pop(ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: AppColors.primary),
+                title: const Text('Galeriden Seç'),
+                onTap: () => Navigator.of(context).pop(ImageSource.gallery),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (source == null) return; // Kullanıcı iptal etti
+
     try {
-      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+      final XFile? image = await _picker.pickImage(source: source);
       if (image == null) return;
 
       setState(() => _analyzing = true);
@@ -595,12 +669,6 @@ class _PlantDetailPageState extends State<PlantDetailPage> with SingleTickerProv
                     icon: const Icon(Icons.arrow_back, color: Colors.white),
                     onPressed: () => Navigator.of(context).pop(true),
                   ),
-                  actions: [
-                    IconButton(
-                      icon: const Icon(Icons.settings, color: Colors.white),
-                      onPressed: () {},
-                    ),
-                  ],
                   flexibleSpace: FlexibleSpaceBar(
                     title: Text(
                       nickname, // Header'da nickname göster
@@ -927,10 +995,17 @@ class _PlantDetailPageState extends State<PlantDetailPage> with SingleTickerProv
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(color: AppColors.primary.withOpacity(0.3)),
                 ),
-                child: const Icon(
-                  Icons.psychology,
-                  color: AppColors.primary,
-                  size: 40,
+                child: Image.asset(
+                  'assets/icon/ai.png',
+                  width: 40,
+                  height: 40,
+                  errorBuilder: (context, error, stackTrace) {
+                    return const Icon(
+                      Icons.psychology,
+                      color: AppColors.primary,
+                      size: 40,
+                    );
+                  },
                 ),
               ),
               // Chat Preview
@@ -1168,14 +1243,14 @@ class _PlantDetailPageState extends State<PlantDetailPage> with SingleTickerProv
     return ElevatedButton(
       onPressed: isLoading ? null : onPressed,
       style: ElevatedButton.styleFrom(
-        backgroundColor: isAI ? AppColors.primary.withOpacity(0.1) : AppColors.primary,
+        backgroundColor: isAI ? AppColors.primary.withOpacity(0.15) : AppColors.primary,
         foregroundColor: isAI ? AppColors.primary : Colors.white,
         padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(
             color: isAI ? AppColors.primary : Colors.transparent,
-            width: 1.5,
+            width: isAI ? 2 : 1.5,
           ),
         ),
         elevation: 0,
@@ -1189,13 +1264,23 @@ class _PlantDetailPageState extends State<PlantDetailPage> with SingleTickerProv
           : Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(icon, size: 20),
-                const SizedBox(width: 8),
+                isAI
+                    ? Image.asset(
+                        'assets/icon/ai.png',
+                        width: 28,
+                        height: 28,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Icon(icon, size: 28, color: AppColors.primary);
+                        },
+                      )
+                    : Icon(icon, size: 20),
+                const SizedBox(width: 10),
                 Text(
                   label,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                         color: isAI ? AppColors.primary : Colors.white,
+                        fontSize: isAI ? 15 : null,
                       ),
                 ),
               ],
@@ -1328,10 +1413,17 @@ class _PlantDetailPageState extends State<PlantDetailPage> with SingleTickerProv
             color: AppColors.primary.withOpacity(0.1),
             borderRadius: BorderRadius.circular(12),
           ),
-          child: const Icon(
-            Icons.psychology,
-            color: AppColors.primary,
-            size: 24,
+          child: Image.asset(
+            'assets/icon/ai.png',
+            width: 24,
+            height: 24,
+            errorBuilder: (context, error, stackTrace) {
+              return const Icon(
+                Icons.psychology,
+                color: AppColors.primary,
+                size: 24,
+              );
+            },
           ),
         ),
         title: Text(
@@ -1381,15 +1473,1755 @@ class _PlantDetailPageState extends State<PlantDetailPage> with SingleTickerProv
   }
 
   Widget _buildCareTab() {
-    return const Center(
-      child: Text('Bakım bilgileri burada görünecek'),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 16),
+          // Sulama kartı
+          _buildCareItemCard(
+            icon: Icons.water_drop, // IconData olarak kalacak ama widget'ta Image.asset kullanılacak
+            iconAsset: 'assets/images/Sulamak.png',
+            title: 'Su',
+            subtitle: _getCareSubtitle('watering'),
+            isDue: _isCareActionDue('watering'),
+            onTap: () => _showCareActionConfirmation('watering'),
+            onSettingsTap: () => _showCareSettingsModal('watering'),
+          ),
+          const SizedBox(height: 12),
+          // Gübreleme kartı
+          _buildCareItemCard(
+            icon: Icons.eco, // IconData olarak kalacak ama widget'ta Image.asset kullanılacak
+            iconAsset: 'assets/images/Gübrelemek.png',
+            title: 'Gübre',
+            subtitle: _getCareSubtitle('fertilization'),
+            isDue: _isCareActionDue('fertilization'),
+            onTap: () => _showCareActionConfirmation('fertilization'),
+            onSettingsTap: () => _showCareSettingsModal('fertilization'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getCareSubtitle(String type) {
+    final settings = type == 'watering' 
+        ? _wateringNotificationSettings 
+        : _fertilizationNotificationSettings;
+    
+    final lastDate = type == 'watering' 
+        ? _lastWateringDate 
+        : _lastFertilizationDate;
+    
+    // Eğer ayar yoksa
+    if (settings == null || settings['enabled'] != true) {
+      return 'Ayarlanmadı';
+    }
+
+    try {
+      final repeatValue = settings['repeatValue'] as int? ?? 13;
+      final repeatUnit = settings['repeatUnit'] as String? ?? 'days';
+      
+      final now = DateTime.now();
+      final nowDate = DateTime(now.year, now.month, now.day);
+      
+      // Eğer henüz işlem yapılmamışsa, bugünden itibaren hesapla
+      final baseDate = lastDate ?? now;
+      final baseDateOnly = DateTime(baseDate.year, baseDate.month, baseDate.day);
+      
+      DateTime nextDate;
+      if (repeatUnit == 'weeks') {
+        nextDate = baseDate.add(Duration(days: repeatValue * 7));
+      } else if (repeatUnit == 'months') {
+        nextDate = DateTime(baseDate.year, baseDate.month + repeatValue, baseDate.day);
+      } else {
+        nextDate = baseDate.add(Duration(days: repeatValue));
+      }
+      
+      // Sadece tarih kısmını karşılaştır (saat önemli değil)
+      final nextDateOnly = DateTime(nextDate.year, nextDate.month, nextDate.day);
+      final difference = nextDateOnly.difference(nowDate).inDays;
+      
+      // Eğer bugün zaten yapıldıysa, bir sonraki tarihi göster
+      if (lastDate != null && baseDateOnly.isAtSameMomentAs(nowDate)) {
+        // Bugün yapıldı, bir sonraki tarihi göster
+        if (difference <= 0) {
+          // Bir sonraki tarih bugün veya geçmişte, bu durumda tekrar hesapla
+          // (Bu durum normalde olmamalı ama güvenlik için)
+          return 'Yarın';
+        } else if (difference == 1) {
+          return 'Yarın';
+        } else {
+          return '$difference gün sonra';
+        }
+      }
+      
+      if (difference < 0) {
+        return 'Sulanması gerekiyor';
+      } else if (difference == 0) {
+        // Bugünse bildirim zamanını kontrol et
+        final reminderTimeStr = settings['reminderTime'] as String?;
+        if (reminderTimeStr != null) {
+          final parts = reminderTimeStr.split(':');
+          final reminderHour = int.parse(parts[0]);
+          final reminderMinute = int.parse(parts[1]);
+          final now = DateTime.now();
+          
+          if (now.hour > reminderHour || (now.hour == reminderHour && now.minute >= reminderMinute)) {
+            return 'Sulanması gerekiyor';
+          } else {
+            return 'Bugün';
+          }
+        }
+        return 'Bugün';
+      } else if (difference == 1) {
+        return 'Yarın';
+      } else {
+        return '$difference gün sonra';
+      }
+    } catch (e) {
+      print('❌ _getCareSubtitle hatası: $e');
+      return 'Ayarlanmadı';
+    }
+  }
+
+  bool _isCareActionDue(String type) {
+    final settings = type == 'watering' 
+        ? _wateringNotificationSettings 
+        : _fertilizationNotificationSettings;
+    
+    final lastDate = type == 'watering' 
+        ? _lastWateringDate 
+        : _lastFertilizationDate;
+    
+    if (settings == null || settings['enabled'] != true) {
+      return false;
+    }
+
+    try {
+      final repeatValue = settings['repeatValue'] as int? ?? 13;
+      final repeatUnit = settings['repeatUnit'] as String? ?? 'days';
+      final reminderTimeStr = settings['reminderTime'] as String?;
+      
+      final now = DateTime.now();
+      final nowDate = DateTime(now.year, now.month, now.day);
+      
+      // Eğer henüz işlem yapılmamışsa, bildirim zamanı geldiyse true döndür
+      if (lastDate == null) {
+        // Bildirim zamanını kontrol et
+        if (reminderTimeStr != null) {
+          final parts = reminderTimeStr.split(':');
+          final reminderHour = int.parse(parts[0]);
+          final reminderMinute = int.parse(parts[1]);
+          
+          // Bugün bildirim zamanı geçtiyse veya şu an bildirim zamanıysa
+          if (now.hour > reminderHour || (now.hour == reminderHour && now.minute >= reminderMinute)) {
+            return true;
+          }
+        }
+        return false;
+      }
+      
+      // Son işlem tarihinden itibaren bir sonraki tarihi hesapla
+      DateTime nextDate;
+      if (repeatUnit == 'weeks') {
+        nextDate = lastDate.add(Duration(days: repeatValue * 7));
+      } else if (repeatUnit == 'months') {
+        nextDate = DateTime(lastDate.year, lastDate.month + repeatValue, lastDate.day);
+      } else {
+        nextDate = lastDate.add(Duration(days: repeatValue));
+      }
+      
+      // Bildirim zamanını ekle
+      if (reminderTimeStr != null) {
+        final parts = reminderTimeStr.split(':');
+        final reminderHour = int.parse(parts[0]);
+        final reminderMinute = int.parse(parts[1]);
+        nextDate = DateTime(nextDate.year, nextDate.month, nextDate.day, reminderHour, reminderMinute);
+      }
+      
+      final nextDateOnly = DateTime(nextDate.year, nextDate.month, nextDate.day);
+      
+      // Eğer bugün yapıldıysa, bir sonraki tarihi kontrol et
+      final lastDateOnly = DateTime(lastDate.year, lastDate.month, lastDate.day);
+      if (lastDateOnly.isAtSameMomentAs(nowDate)) {
+        // Bugün yapıldı, bir sonraki tarih henüz gelmedi
+        return false;
+      }
+      
+      // Bir sonraki tarih bugün veya geçmişteyse, bildirim zamanı geldi
+      if (nextDateOnly.isBefore(nowDate) || nextDateOnly.isAtSameMomentAs(nowDate)) {
+        // Bildirim zamanını kontrol et
+        if (reminderTimeStr != null) {
+          final parts = reminderTimeStr.split(':');
+          final reminderHour = int.parse(parts[0]);
+          final reminderMinute = int.parse(parts[1]);
+          
+          // Bugünse ve bildirim zamanı geçtiyse veya şu an bildirim zamanıysa
+          if (nextDateOnly.isAtSameMomentAs(nowDate)) {
+            if (now.hour > reminderHour || (now.hour == reminderHour && now.minute >= reminderMinute)) {
+              return true;
+            }
+          } else {
+            // Geçmişteyse kesinlikle true
+            return true;
+          }
+        } else {
+          // Bildirim zamanı yoksa, tarih kontrolü yeterli
+          return true;
+        }
+      }
+      
+      return false;
+    } catch (e) {
+      print('❌ _isCareActionDue hatası: $e');
+      return false;
+    }
+  }
+
+  Widget _buildCareItemCard({
+    required IconData icon,
+    String? iconAsset,
+    required String title,
+    required String subtitle,
+    required bool isDue,
+    required VoidCallback onTap,
+    required VoidCallback onSettingsTap,
+  }) {
+    final isConfigured = subtitle != 'Ayarlanmadı';
+    final iconColor = isDue ? Colors.red : AppColors.primary;
+    final iconBgColor = isDue ? Colors.red.withOpacity(0.1) : AppColors.primary.withOpacity(0.1);
+    
+    return InkWell(
+      onTap: isConfigured ? onTap : null,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.cardBackground,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isDue ? Colors.red.withOpacity(0.3) : AppColors.border,
+            width: isDue ? 2 : 1,
+          ),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                      ),
+                      if (isDue)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            title == 'Su' ? 'Sulanması gerekiyor' : (title == 'Gübre' ? 'Gübrelenmesi gerekiyor' : 'Bakım gerekiyor'),
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Colors.red,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: isConfigured 
+                          ? (isDue ? Colors.red : AppColors.primary)
+                          : AppColors.textSecondary,
+                      fontWeight: isConfigured ? FontWeight.w500 : FontWeight.normal,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: iconBgColor,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: iconColor,
+                  width: 2,
+                ),
+              ),
+              child: iconAsset != null
+                  ? Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: Image.asset(
+                        iconAsset,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Icon(icon, color: iconColor, size: 24);
+                        },
+                      ),
+                    )
+                  : Icon(icon, color: iconColor, size: 24),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: _ControlIcon(color: AppColors.textSecondary),
+              onPressed: onSettingsTap,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Kontrol ikonu widget'ı (üç yatay çizgi ve her birinin sağında küçük daire)
+  Widget _ControlIcon({required Color color, double size = 20}) {
+    return SizedBox(
+      width: size,
+      height: size * 0.75,
+      child: CustomPaint(
+        painter: _ControlIconPainter(color: color),
+      ),
+    );
+  }
+
+  Future<void> _showCareActionConfirmation(String type) async {
+    final isWatering = type == 'watering';
+    final actionName = isWatering ? 'sulamak' : 'gübrelemek';
+    
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('$actionName istediğinize emin misiniz?'),
+        content: Text('${widget.plant['name'] ?? 'Bitki'} bitkinizi ${actionName} istediğinize emin misiniz?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Hayır'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Evet'),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirmed == true) {
+      await _completeCareAction(type);
+    }
+  }
+
+  Future<void> _completeCareAction(String type) async {
+    final plantId = widget.plant['id'] as String;
+    final plantName = widget.plant['name'] ?? 'Bitki';
+    final isWatering = type == 'watering';
+    final actionName = isWatering ? 'sulandı' : 'gübrelendi';
+    
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final now = DateTime.now();
+      
+      // Son işlem tarihini kaydet
+      if (isWatering) {
+        await prefs.setString('last_watering_$plantId', now.toIso8601String());
+        setState(() {
+          _lastWateringDate = now;
+        });
+        // Sulama geçmişine ekle
+        await _addToCareHistory(plantId, 'watering', now);
+      } else {
+        await prefs.setString('last_fertilization_$plantId', now.toIso8601String());
+        setState(() {
+          _lastFertilizationDate = now;
+        });
+        // Gübreleme geçmişine ekle
+        await _addToCareHistory(plantId, 'fertilization', now);
+      }
+      
+      // Bir sonraki tarihi hesapla ve göster
+      final settings = isWatering 
+          ? _wateringNotificationSettings 
+          : _fertilizationNotificationSettings;
+      
+      String nextDateText = '';
+      if (settings != null && settings['enabled'] == true) {
+        final repeatValue = settings['repeatValue'] as int? ?? 13;
+        final repeatUnit = settings['repeatUnit'] as String? ?? 'days';
+        
+        DateTime nextDate;
+        if (repeatUnit == 'weeks') {
+          nextDate = now.add(Duration(days: repeatValue * 7));
+        } else if (repeatUnit == 'months') {
+          nextDate = DateTime(now.year, now.month + repeatValue, now.day);
+        } else {
+          nextDate = now.add(Duration(days: repeatValue));
+        }
+        
+        nextDateText = '\nBir sonraki ${isWatering ? "sulama" : "gübreleme"}: ${DateFormat('d MMMM yyyy', 'tr_TR').format(nextDate)}';
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$plantName bitkiniz $actionName!$nextDateText'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      
+      // Bildirimleri yeniden planla
+      if (settings != null && settings['enabled'] == true) {
+        final reminderTimeStr = settings['reminderTime'] as String? ?? '18:00';
+        final parts = reminderTimeStr.split(':');
+        final reminderTime = TimeOfDay(
+          hour: int.parse(parts[0]),
+          minute: int.parse(parts[1]),
+        );
+        final repeatValue = settings['repeatValue'] as int? ?? 13;
+        final repeatUnit = settings['repeatUnit'] as String? ?? 'days';
+        
+        // Bir sonraki tarihi hesapla
+        DateTime nextScheduledDate;
+        if (repeatUnit == 'weeks') {
+          nextScheduledDate = now.add(Duration(days: repeatValue * 7));
+        } else if (repeatUnit == 'months') {
+          nextScheduledDate = DateTime(now.year, now.month + repeatValue, now.day);
+        } else {
+          nextScheduledDate = now.add(Duration(days: repeatValue));
+        }
+        
+        if (isWatering) {
+          final waterAmount = settings['waterAmount'] as String? ?? 'Orta';
+          final howToWater = settings['howToWater'] as String? ?? 'Topraktan';
+          await _notificationService.scheduleWateringNotification(
+            plantId: plantId,
+            plantName: plantName,
+            scheduledDate: nextScheduledDate,
+            reminderTime: reminderTime,
+            repeatDays: repeatUnit == 'days' ? repeatValue : (repeatUnit == 'weeks' ? repeatValue * 7 : repeatValue * 30),
+            repeatUnit: repeatUnit,
+            repeatValue: repeatValue,
+            waterAmount: waterAmount,
+            howToWater: howToWater,
+          );
+        } else {
+          await _notificationService.scheduleFertilizationNotification(
+            plantId: plantId,
+            plantName: plantName,
+            scheduledDate: nextScheduledDate,
+            reminderTime: reminderTime,
+            repeatDays: repeatUnit == 'days' ? repeatValue : (repeatUnit == 'weeks' ? repeatValue * 7 : repeatValue * 30),
+            repeatUnit: repeatUnit,
+            repeatValue: repeatValue,
+          );
+        }
+        
+        // Ayarları yeniden yükle
+        await _loadPlantData();
+      }
+      
+      // State'i güncelle (UI'ı yenile)
+      if (mounted) {
+        setState(() {
+          // State zaten _loadPlantData içinde güncelleniyor ama emin olmak için
+        });
+      }
+    } catch (e) {
+      print('❌ _completeCareAction hatası: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Hata: $e')),
+        );
+      }
+    }
+  }
+
+  // Bakım geçmişine ekle
+  Future<void> _addToCareHistory(String plantId, String type, DateTime date) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'care_history_${plantId}_$type';
+      final historyJson = prefs.getString(key) ?? '[]';
+      final history = List<String>.from(jsonDecode(historyJson) as List);
+      
+      // Yeni tarihi ekle (en başa)
+      history.insert(0, date.toIso8601String());
+      
+      // Maksimum 100 kayıt tut
+      if (history.length > 100) {
+        history.removeRange(100, history.length);
+      }
+      
+      await prefs.setString(key, jsonEncode(history));
+    } catch (e) {
+      print('❌ Bakım geçmişi kaydetme hatası: $e');
+    }
+  }
+
+  // Bakım geçmişini al
+  Future<List<DateTime>> _getCareHistory(String plantId, String type) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'care_history_${plantId}_$type';
+      final historyJson = prefs.getString(key) ?? '[]';
+      final history = List<String>.from(jsonDecode(historyJson) as List);
+      
+      return history.map((dateStr) => DateTime.parse(dateStr)).toList();
+    } catch (e) {
+      print('❌ Bakım geçmişi okuma hatası: $e');
+      return [];
+    }
+  }
+
+  // Bakım geçmişi modalını göster
+  Future<void> _showCareHistoryModal(BuildContext context, String plantId, bool isWatering) async {
+    final history = await _getCareHistory(plantId, isWatering ? 'watering' : 'fertilization');
+    final title = isWatering ? 'Sulama Geçmişi' : 'Gübreleme Geçmişi';
+    
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.7,
+        decoration: BoxDecoration(
+          color: AppColors.cardBackground,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            // Başlık
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(color: AppColors.border, width: 1),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.close, color: AppColors.textSecondary),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+            ),
+            // Geçmiş listesi
+            Expanded(
+              child: history.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            isWatering ? Icons.water_drop : Icons.eco,
+                            size: 64,
+                            color: AppColors.textSecondary,
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Henüz ${isWatering ? "sulama" : "gübreleme"} yapılmadı',
+                            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: history.length,
+                      itemBuilder: (context, index) {
+                        final date = history[index];
+                        final dateOnly = DateTime(date.year, date.month, date.day);
+                        final now = DateTime.now();
+                        final today = DateTime(now.year, now.month, now.day);
+                        final yesterday = today.subtract(const Duration(days: 1));
+                        
+                        String dateText;
+                        if (dateOnly.isAtSameMomentAs(today)) {
+                          dateText = 'Bugün';
+                        } else if (dateOnly.isAtSameMomentAs(yesterday)) {
+                          dateText = 'Dün';
+                        } else {
+                          dateText = DateFormat('d MMMM yyyy', 'tr_TR').format(date);
+                        }
+                        
+                        final timeText = DateFormat('HH:mm', 'tr_TR').format(date);
+                        
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: AppColors.cardBackground,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: AppColors.border, width: 1),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 48,
+                                height: 48,
+                                decoration: BoxDecoration(
+                                  color: AppColors.primary.withOpacity(0.1),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  isWatering ? Icons.water_drop : Icons.eco,
+                                  color: AppColors.primary,
+                                  size: 24,
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      dateText,
+                                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      timeText,
+                                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showCareSettingsModal(String type) async {
+    final plantId = widget.plant['id'] as String;
+    final plantName = widget.plant['name'] ?? 'Bitki';
+    final isWatering = type == 'watering';
+    
+    final currentSettings = isWatering 
+        ? _wateringNotificationSettings 
+        : _fertilizationNotificationSettings;
+
+    int repeatValue = 13;
+    String repeatUnit = 'days'; // days, weeks, months
+    String waterAmount = 'Orta';
+    String howToWater = 'Topraktan';
+    TimeOfDay reminderTime = const TimeOfDay(hour: 18, minute: 0);
+    final lastDate = isWatering ? _lastWateringDate : _lastFertilizationDate;
+
+    // Mevcut ayarları yükle
+    if (currentSettings != null) {
+      try {
+        repeatValue = currentSettings['repeatValue'] as int? ?? 13;
+        repeatUnit = currentSettings['repeatUnit'] as String? ?? 'days';
+        waterAmount = currentSettings['waterAmount'] as String? ?? 'Orta';
+        howToWater = currentSettings['howToWater'] as String? ?? 'Topraktan';
+        
+        // Hatırlatma zamanını yükle
+        final reminderTimeStr = currentSettings['reminderTime'] as String? ?? '18:00';
+        final parts = reminderTimeStr.split(':');
+        if (parts.length == 2) {
+          reminderTime = TimeOfDay(
+            hour: int.tryParse(parts[0]) ?? 18,
+            minute: int.tryParse(parts[1]) ?? 0,
+          );
+        }
+      } catch (e) {
+        // Hata durumunda varsayılan değerler kullanılacak
+      }
+    }
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Container(
+          height: MediaQuery.of(context).size.height * 0.85,
+          decoration: BoxDecoration(
+            color: AppColors.cardBackground,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              // Header
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    const SizedBox(width: 48),
+                    Expanded(
+                      child: Text(
+                        isWatering ? 'Su' : 'Gübre',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.close, color: AppColors.textSecondary),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Sıklık
+                      _buildSettingsRowDark(
+                        icon: Icons.calendar_today,
+                        iconColor: AppColors.primary,
+                        title: 'Sıklık',
+                        subtitle: 'Her $repeatValue ${repeatUnit == 'days' ? 'günler' : repeatUnit == 'weeks' ? 'haftalar' : 'aylar'}',
+                        subtitleColor: AppColors.primary,
+                        onTap: () => _showFrequencyPicker(context, setModalState, repeatValue, repeatUnit, (value, unit) {
+                          setModalState(() {
+                            repeatValue = value;
+                            repeatUnit = unit;
+                          });
+                        }),
+                      ),
+                      const Divider(color: AppColors.border, height: 1),
+                      // Hatırlatma Zamanı
+                      _buildSettingsRowDark(
+                        icon: Icons.access_time,
+                        iconColor: AppColors.primary,
+                        title: 'Hatırlatma Zamanı',
+                        subtitle: '${reminderTime.hour.toString().padLeft(2, '0')}:${reminderTime.minute.toString().padLeft(2, '0')}',
+                        subtitleColor: AppColors.primary,
+                        onTap: () async {
+                          final pickedTime = await showTimePicker(
+                            context: context,
+                            initialTime: reminderTime,
+                            builder: (context, child) {
+                              return Theme(
+                                data: Theme.of(context).copyWith(
+                                  colorScheme: ColorScheme.light(
+                                    primary: AppColors.primary,
+                                    onPrimary: Colors.white,
+                                    onSurface: AppColors.textPrimary,
+                                  ),
+                                ),
+                                child: child!,
+                              );
+                            },
+                          );
+                          if (pickedTime != null) {
+                            setModalState(() {
+                              reminderTime = pickedTime;
+                            });
+                          }
+                        },
+                      ),
+                      const Divider(color: AppColors.border, height: 1),
+                      // Son sulama / Son gübreleme
+                      _buildSettingsRowDark(
+                        icon: Icons.calendar_today,
+                        iconColor: Colors.grey,
+                        title: isWatering ? 'Son sulama' : 'Son gübreleme',
+                        subtitle: lastDate != null 
+                            ? DateFormat('d.MM.yyyy', 'tr_TR').format(lastDate!)
+                            : 'Henüz yapılmadı',
+                        onTap: () => _showCareHistoryModal(context, plantId, isWatering),
+                      ),
+                      const Divider(color: AppColors.border, height: 1),
+                      // Programı iptal et
+                      _buildSettingsRowDark(
+                        icon: Icons.cancel,
+                        iconColor: Colors.red,
+                        title: 'Programı iptal et',
+                        subtitle: '',
+                        onTap: () async {
+                          final confirmed = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: const Text('Programı iptal et'),
+                              content: Text('${isWatering ? "Sulama" : "Gübreleme"} programını iptal etmek istediğinize emin misiniz?'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.of(context).pop(false),
+                                  child: const Text('Hayır'),
+                                ),
+                                ElevatedButton(
+                                  onPressed: () => Navigator.of(context).pop(true),
+                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                                  child: const Text('Evet'),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (confirmed == true) {
+                            await _notificationService.cancelNotification(plantId, type);
+                            await _loadPlantData();
+                            if (context.mounted) {
+                              Navigator.of(context).pop();
+                            }
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              // Kaydet butonu
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      // Son sulama/gübreleme tarihini kullan veya bugünü kullan
+                      final baseDate = lastDate ?? DateTime.now();
+                      
+                      // Bir sonraki tarihi hesapla
+                      DateTime nextDate;
+                      if (repeatUnit == 'weeks') {
+                        nextDate = baseDate.add(Duration(days: repeatValue * 7));
+                      } else if (repeatUnit == 'months') {
+                        nextDate = DateTime(baseDate.year, baseDate.month + repeatValue, baseDate.day);
+                      } else {
+                        nextDate = baseDate.add(Duration(days: repeatValue));
+                      }
+                      
+                      // Seçilen hatırlatma zamanını kullan (yukarıda tanımlı)
+                      final repeatDays = repeatUnit == 'days' 
+                          ? repeatValue 
+                          : (repeatUnit == 'weeks' ? repeatValue * 7 : repeatValue * 30);
+                      
+                      final success = isWatering
+                          ? await _notificationService.scheduleWateringNotification(
+                              plantId: plantId,
+                              plantName: plantName,
+                              scheduledDate: nextDate,
+                              reminderTime: reminderTime,
+                              repeatDays: repeatDays,
+                              repeatUnit: repeatUnit,
+                              repeatValue: repeatValue,
+                              waterAmount: waterAmount,
+                              howToWater: howToWater,
+                            )
+                          : await _notificationService.scheduleFertilizationNotification(
+                              plantId: plantId,
+                              plantName: plantName,
+                              scheduledDate: nextDate,
+                              reminderTime: reminderTime,
+                              repeatDays: repeatDays,
+                              repeatUnit: repeatUnit,
+                              repeatValue: repeatValue,
+                            );
+
+                      // Ayarlar her durumda kaydedildi (success kontrolüne gerek yok)
+                      Navigator.of(context).pop();
+                      await _loadPlantData();
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('${isWatering ? "Sulama" : "Gübreleme"} programı kaydedildi'),
+                            backgroundColor: AppColors.primary,
+                          ),
+                        );
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text(
+                      'Kaydet',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsRow({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: AppColors.primary),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (subtitle.isNotEmpty)
+                    Text(
+                      subtitle,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: AppColors.textSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSettingsRowDark({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+    Color? subtitleColor,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        margin: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          children: [
+            Icon(icon, color: iconColor, size: 24),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (subtitle.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        subtitle,
+                        style: TextStyle(
+                          color: subtitleColor ?? AppColors.textSecondary,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: AppColors.textSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showWaterAmountPicker(
+    BuildContext context,
+    StateSetter setModalState,
+    String currentValue,
+    Function(String) onChanged,
+  ) async {
+    final options = ['Az', 'Orta', 'Çok'];
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: BoxDecoration(
+          color: AppColors.cardBackground,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ...options.map((option) => ListTile(
+              title: Text(option, style: TextStyle(color: AppColors.textPrimary)),
+              onTap: () => Navigator.of(context).pop(option),
+              selected: option == currentValue,
+            )),
+          ],
+        ),
+      ),
+    );
+    if (selected != null) {
+      onChanged(selected);
+    }
+  }
+
+  Future<void> _showHowToWaterPicker(
+    BuildContext context,
+    StateSetter setModalState,
+    String currentValue,
+    Function(String) onChanged,
+  ) async {
+    final options = ['Topraktan', 'Yapraklardan', 'Sprey ile'];
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: BoxDecoration(
+          color: AppColors.cardBackground,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ...options.map((option) => ListTile(
+              title: Text(option, style: TextStyle(color: AppColors.textPrimary)),
+              onTap: () => Navigator.of(context).pop(option),
+              selected: option == currentValue,
+            )),
+          ],
+        ),
+      ),
+    );
+    if (selected != null) {
+      onChanged(selected);
+    }
+  }
+
+  Future<void> _showFrequencyPicker(
+    BuildContext context,
+    StateSetter setModalState,
+    int currentValue,
+    String currentUnit,
+    Function(int, String) onChanged,
+  ) async {
+    int selectedValue = currentValue;
+    String selectedUnit = currentUnit;
+    
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setPickerState) => Container(
+          height: MediaQuery.of(context).size.height * 0.5,
+          decoration: BoxDecoration(
+            color: AppColors.cardBackground,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: Text('İptal', style: TextStyle(color: AppColors.textSecondary)),
+                    ),
+                    Text(
+                      'Sıklık Seç',
+                      style: TextStyle(color: AppColors.textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        onChanged(selectedValue, selectedUnit);
+                        Navigator.of(context).pop();
+                      },
+                      child: const Text('Tamam', style: TextStyle(color: AppColors.primary)),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: Theme(
+                  data: Theme.of(context).copyWith(
+                    cupertinoOverrideTheme: CupertinoThemeData(
+                      brightness: Brightness.light,
+                      primaryColor: AppColors.primary,
+                      textTheme: CupertinoTextThemeData(
+                        textStyle: TextStyle(color: AppColors.textPrimary),
+                        pickerTextStyle: TextStyle(color: AppColors.textPrimary),
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: CupertinoPicker(
+                          scrollController: FixedExtentScrollController(
+                            initialItem: selectedValue > 0 ? selectedValue - 1 : 12,
+                          ),
+                          itemExtent: 50,
+                          backgroundColor: AppColors.cardBackground,
+                          onSelectedItemChanged: (index) {
+                            setPickerState(() {
+                              selectedValue = index + 1;
+                            });
+                          },
+                          children: List.generate(365, (index) {
+                            return Center(
+                              child: Text(
+                                '${index + 1}',
+                                style: TextStyle(color: AppColors.textPrimary),
+                              ),
+                            );
+                          }),
+                        ),
+                      ),
+                      Expanded(
+                        child: CupertinoPicker(
+                          scrollController: FixedExtentScrollController(
+                            initialItem: selectedUnit == 'days' ? 0 : (selectedUnit == 'weeks' ? 1 : 2),
+                          ),
+                          itemExtent: 50,
+                          backgroundColor: AppColors.cardBackground,
+                          onSelectedItemChanged: (index) {
+                            setPickerState(() {
+                              selectedUnit = ['days', 'weeks', 'months'][index];
+                            });
+                          },
+                          children: [
+                            Center(child: Text('Günler', style: TextStyle(color: AppColors.textPrimary))),
+                            Center(child: Text('Haftalar', style: TextStyle(color: AppColors.textPrimary))),
+                            Center(child: Text('Aylar', style: TextStyle(color: AppColors.textPrimary))),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
   Widget _buildInfoTab() {
-    return const Center(
-      child: Text('Bitki bilgileri burada görünecek'),
+    final plantType = widget.plant['originalPlantType'] as String? ?? 
+                      widget.plant['plantType'] as String? ?? 
+                      'Bilinmeyen Bitki';
+    final plantInfo = _getPlantInfo(plantType);
+    
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: 8),
+          // Kısa bilgi kutucuğu
+          if (plantInfo['description'] != null)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppColors.cardBackground,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.info_outline,
+                    color: AppColors.primary,
+                    size: 24,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      plantInfo['description'] as String,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: AppColors.textPrimary,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const SizedBox(height: 24),
+          // Nasıl Yapılır başlığı
+          Text(
+            'Nasıl Yapılır',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Su kartı
+          _buildInfoCard(
+            icon: Icons.water_drop,
+            iconColor: Colors.blue,
+            title: 'Su',
+            subtitle: plantInfo['watering'] as String? ?? 'Bilgi bulunamadı',
+            onTap: () {},
+          ),
+          const SizedBox(height: 12),
+          // Gübre kartı
+          _buildInfoCard(
+            icon: Icons.eco,
+            iconColor: Colors.green,
+            title: 'Gübre',
+            subtitle: plantInfo['fertilizer'] as String? ?? 'Bilgi bulunamadı',
+            onTap: () {},
+          ),
+          const SizedBox(height: 12),
+          // Üretim kartı
+          _buildInfoCard(
+            icon: Icons.local_florist,
+            iconColor: Colors.purple,
+            title: 'Üretim',
+            subtitle: plantInfo['propagation'] as String? ?? 'Bilgi bulunamadı',
+            onTap: () {},
+          ),
+          const SizedBox(height: 12),
+          // Saksı Değiştirme kartı
+          _buildInfoCard(
+            icon: Icons.change_circle,
+            iconColor: Colors.orange,
+            title: 'Saksı Değiştirme',
+            subtitle: plantInfo['repotting'] as String? ?? 'Bilgi bulunamadı',
+            onTap: () {},
+          ),
+          const SizedBox(height: 24),
+          // Çevre Koşulları başlığı
+          Text(
+            'Çevre Koşulları',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Sıcaklık kartı
+          _buildInfoCard(
+            icon: Icons.thermostat,
+            iconColor: Colors.red,
+            title: 'Uygun Sıcaklık Aralığı',
+            subtitle: plantInfo['temperature'] as String? ?? 'Bilgi bulunamadı',
+            onTap: () {},
+          ),
+          const SizedBox(height: 12),
+          // Nem kartı
+          _buildInfoCard(
+            icon: Icons.water,
+            iconColor: Colors.cyan,
+            title: 'Uygun Nem Aralığı',
+            subtitle: plantInfo['humidity'] as String? ?? 'Bilgi bulunamadı',
+            onTap: () {},
+          ),
+          const SizedBox(height: 12),
+          // CO2 kartı
+          _buildInfoCard(
+            icon: Icons.air,
+            iconColor: Colors.teal,
+            title: 'Uygun CO2 Aralığı',
+            subtitle: plantInfo['co2'] as String? ?? 'Bilgi bulunamadı',
+            onTap: () {},
+          ),
+          const SizedBox(height: 12),
+          // Güneş Işığı kartı
+          _buildInfoCard(
+            icon: Icons.wb_sunny,
+            iconColor: Colors.amber,
+            title: 'Güneş Işığı',
+            subtitle: plantInfo['light'] as String? ?? 'Bilgi bulunamadı',
+            onTap: () {},
+          ),
+          const SizedBox(height: 12),
+          // Toprak kartı
+          _buildInfoCard(
+            icon: Icons.terrain,
+            iconColor: Colors.brown,
+            title: 'Toprak',
+            subtitle: plantInfo['soil'] as String? ?? 'Bilgi bulunamadı',
+            onTap: () {},
+          ),
+          const SizedBox(height: 12),
+          // Konum kartı
+          _buildInfoCard(
+            icon: Icons.location_on,
+            iconColor: Colors.blue,
+            title: 'Uygun Konum',
+            subtitle: plantInfo['location'] as String? ?? 'Bilgi bulunamadı',
+            onTap: () {},
+          ),
+          const SizedBox(height: 24),
+        ],
+      ),
     );
+  }
+
+  Widget _buildInfoCard({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.cardBackground,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: iconColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                icon,
+                color: iconColor,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Map<String, dynamic> _getPlantInfo(String plantType) {
+    // Bitki türüne göre bilgileri döndür
+    // Önce İngilizce'den Türkçe'ye çevir varsa
+    var normalizedEnglish = _normalizePlantType(plantType);
+    var turkishType = _plantTypeTranslations[normalizedEnglish] ?? normalizedEnglish;
+    
+    // Eğer zaten Türkçe ise direkt kullan
+    if (_plantTypeTranslations.containsValue(plantType)) {
+      turkishType = plantType;
+    }
+    
+    final normalizedType = turkishType.toLowerCase().trim();
+    
+    // Bitki bilgileri veritabanı
+    final plantDatabase = {
+      // Mısır
+      'mısır': {
+        'description': 'Mısır, dünyada en çok yetiştirilen tahıl bitkilerinden biridir. Yüksek verimli ve besleyici bir bitkidir.',
+        'watering': 'Toprak nemli tutulmalı, özellikle çiçeklenme ve koçan oluşumu döneminde düzenli sulama yapılmalı. Genellikle haftada 2-3 kez sulanır.',
+        'fertilizer': 'Azot, fosfor ve potasyum içeren dengeli gübre kullanılmalı. Ekim öncesi toprak hazırlığında ve bitki gelişim döneminde gübreleme yapılır.',
+        'propagation': 'Tohumla üretilir. İlkbahar aylarında (Nisan-Mayıs) ekim yapılır.',
+        'repotting': 'Mısır genellikle açık alanda yetiştirilir, saksı değiştirme gerekmez.',
+        'temperature': '15-30°C arası ideal sıcaklıktır. Minimum 10°C\'nin altına düşmemelidir.',
+        'humidity': '%50-70 nem aralığı uygundur.',
+        'co2': '400-1000 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, organik maddece zengin toprak tercih edilir. pH 6.0-7.0 arası uygundur.',
+        'location': 'Güney cepheli, güneşli ve rüzgarlı alanlar idealdir.',
+      },
+      // Domates
+      'domates': {
+        'description': 'Domates, dünyada en çok tüketilen sebzelerden biridir. C vitamini ve likopen açısından zengindir.',
+        'watering': 'Toprak yüzeyi kurudukça sulanmalı. Genellikle haftada 2-3 kez, sabah erken saatlerde sulama yapılır. Yapraklara su değdirilmemelidir.',
+        'fertilizer': 'Çiçeklenme öncesi azotlu gübre, meyve oluşumunda fosfor ve potasyum ağırlıklı gübre kullanılır. Her 2-3 haftada bir gübreleme yapılabilir.',
+        'propagation': 'Tohumla üretilir. Şubat-Mart aylarında fide olarak yetiştirilir, Nisan-Mayıs\'ta bahçeye dikilir.',
+        'repotting': 'Fide döneminde gerekirse daha büyük saksıya alınabilir. Yetişkin bitkiler için geniş saksılar tercih edilir.',
+        'temperature': '18-25°C arası ideal sıcaklıktır. Gece sıcaklığı 15°C\'nin altına düşmemelidir.',
+        'humidity': '%60-80 nem aralığı uygundur.',
+        'co2': '400-800 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, organik maddece zengin toprak tercih edilir. pH 6.0-6.8 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve havalandırması iyi alanlar idealdir.',
+      },
+      // Elma
+      'elma': {
+        'description': 'Elma, dünyada en çok yetiştirilen meyve ağaçlarından biridir. Lif ve antioksidan açısından zengindir.',
+        'watering': 'Genç ağaçlar daha sık sulanır. Yetişkin ağaçlar için toprak kurudukça sulama yapılır. Yaz aylarında haftada 1-2 kez derin sulama yapılmalıdır.',
+        'fertilizer': 'İlkbahar başında azotlu gübre, çiçeklenme sonrası fosfor ve potasyum ağırlıklı gübre kullanılır. Sonbaharda organik gübre uygulanabilir.',
+        'propagation': 'Aşı ile üretilir. Tohumdan yetiştirilenler genellikle meyve vermez.',
+        'repotting': 'Ağaçlar genellikle açık alanda yetiştirilir, saksı değiştirme gerekmez.',
+        'temperature': 'Kışın -20°C\'ye kadar dayanabilir. Yazın 20-25°C arası ideal sıcaklıktır.',
+        'humidity': '%50-70 nem aralığı uygundur.',
+        'co2': '400-600 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, derin toprak tercih edilir. pH 6.0-7.0 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve havalandırması iyi alanlar idealdir.',
+      },
+      // Patlıcan
+      'patlıcan': {
+        'description': 'Patlıcan, Akdeniz mutfağının vazgeçilmez sebzelerinden biridir. Düşük kalorili ve lif açısından zengindir.',
+        'watering': 'Toprak nemli tutulmalı, özellikle meyve oluşumu döneminde düzenli sulama yapılmalı. Haftada 2-3 kez sulanır.',
+        'fertilizer': 'Azot, fosfor ve potasyum içeren dengeli gübre kullanılır. Çiçeklenme ve meyve oluşumu döneminde gübreleme yapılır.',
+        'propagation': 'Tohumla üretilir. Şubat-Mart aylarında fide olarak yetiştirilir, Nisan-Mayıs\'ta bahçeye dikilir.',
+        'repotting': 'Fide döneminde gerekirse daha büyük saksıya alınabilir.',
+        'temperature': '20-30°C arası ideal sıcaklıktır. Minimum 15°C\'nin altına düşmemelidir.',
+        'humidity': '%60-80 nem aralığı uygundur.',
+        'co2': '400-800 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, organik maddece zengin toprak tercih edilir. pH 6.0-7.0 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli alanlar idealdir.',
+      },
+      // Biber
+      'biber': {
+        'description': 'Biber, hem tatlı hem de acı çeşitleriyle mutfakların vazgeçilmez sebzelerindendir. C vitamini açısından çok zengindir.',
+        'watering': 'Toprak yüzeyi kurudukça sulanmalı. Düzenli ve dengeli sulama yapılmalı, aşırı sulamadan kaçınılmalıdır.',
+        'fertilizer': 'Azot, fosfor ve potasyum içeren dengeli gübre kullanılır. Çiçeklenme ve meyve oluşumu döneminde gübreleme yapılır.',
+        'propagation': 'Tohumla üretilir. Şubat-Mart aylarında fide olarak yetiştirilir, Nisan-Mayıs\'ta bahçeye dikilir.',
+        'repotting': 'Fide döneminde gerekirse daha büyük saksıya alınabilir.',
+        'temperature': '20-30°C arası ideal sıcaklıktır. Minimum 15°C\'nin altına düşmemelidir.',
+        'humidity': '%60-80 nem aralığı uygundur.',
+        'co2': '400-800 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, organik maddece zengin toprak tercih edilir. pH 6.0-7.0 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli alanlar idealdir.',
+      },
+      // Salatalık
+      'salatalık': {
+        'description': 'Salatalık, düşük kalorili ve su içeriği yüksek bir sebzedir. Yaz aylarının vazgeçilmez sebzelerindendir.',
+        'watering': 'Yüksek su ihtiyacı vardır. Toprak sürekli nemli tutulmalı, özellikle meyve oluşumu döneminde günlük sulama yapılabilir.',
+        'fertilizer': 'Azot ağırlıklı gübre kullanılır. Çiçeklenme ve meyve oluşumu döneminde fosfor ve potasyum eklenir.',
+        'propagation': 'Tohumla üretilir. Nisan-Mayıs aylarında doğrudan toprağa ekilebilir.',
+        'repotting': 'Geniş saksılarda yetiştirilebilir, gerekirse daha büyük saksıya alınabilir.',
+        'temperature': '18-25°C arası ideal sıcaklıktır. Minimum 15°C\'nin altına düşmemelidir.',
+        'humidity': '%70-90 nem aralığı uygundur.',
+        'co2': '400-800 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, organik maddece zengin toprak tercih edilir. pH 6.0-7.0 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve havalandırması iyi alanlar idealdir.',
+      },
+      // Kalanchoe
+      'kalanchoe': {
+        'description': 'Kalanchoe, sukulent bir bitkidir. Bakımı kolay ve uzun süre çiçek açan bir iç mekan bitkisidir.',
+        'watering': 'Toprak tamamen kuruduktan sonra sulanmalı. Genellikle 1-2 haftada bir sulama yeterlidir. Kış aylarında daha az sulanır.',
+        'fertilizer': 'İlkbahar ve yaz aylarında ayda bir kez sukulent gübresi kullanılabilir. Kış aylarında gübreleme yapılmaz.',
+        'propagation': 'Yaprak veya gövde çelikleri ile üretilir. İlkbahar ve yaz aylarında yapılır.',
+        'repotting': 'Her 2-3 yılda bir, ilkbahar aylarında saksı değiştirilebilir.',
+        'temperature': '15-25°C arası ideal sıcaklıktır. Minimum 10°C\'nin altına düşmemelidir.',
+        'humidity': '%40-60 nem aralığı uygundur.',
+        'co2': '400-600 ppm arası normal seviyelerdir.',
+        'light': 'Parlak, dolaylı güneş ışığı gerektirir. Doğrudan güneş ışığından kaçınılmalıdır.',
+        'soil': 'İyi drene edilmiş, kumlu toprak karışımı tercih edilir. Sukulent toprağı kullanılabilir.',
+        'location': 'Doğu veya batı cepheli pencere önü idealdir. İç mekan bitkisidir.',
+      },
+      // Kaktüs
+      'kaktüs': {
+        'description': 'Kaktüs, çöl bitkilerinin en bilinen örneğidir. Su depolama yeteneği sayesinde kurak koşullara dayanıklıdır.',
+        'watering': 'Toprak tamamen kuruduktan sonra, genellikle 2-4 haftada bir sulanmalı. Kış aylarında çok daha az sulanır.',
+        'fertilizer': 'İlkbahar ve yaz aylarında ayda bir kez sukulent/kaktüs gübresi kullanılabilir.',
+        'propagation': 'Tohum, yavru veya çelik ile üretilir. İlkbahar aylarında yapılır.',
+        'repotting': 'Her 2-3 yılda bir, ilkbahar aylarında saksı değiştirilebilir.',
+        'temperature': '20-30°C arası ideal sıcaklıktır. Kışın 10°C\'nin altına düşmemelidir.',
+        'humidity': '%30-50 nem aralığı uygundur.',
+        'co2': '400-600 ppm arası normal seviyelerdir.',
+        'light': 'Parlak, direkt güneş ışığı gerektirir. Günde en az 4-6 saat güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, kumlu ve çakıllı toprak karışımı tercih edilir. Kaktüs toprağı kullanılabilir.',
+        'location': 'Güney cepheli pencere önü idealdir. İç mekan bitkisidir.',
+      },
+      // Üzüm
+      'üzüm': {
+        'description': 'Üzüm, dünyada en çok yetiştirilen meyve bitkilerinden biridir. Şarap yapımında ve sofralık olarak tüketilir.',
+        'watering': 'Genç bitkiler daha sık sulanır. Yetişkin asmalar için toprak kurudukça derin sulama yapılır. Meyve olgunlaşma döneminde düzenli sulama önemlidir.',
+        'fertilizer': 'İlkbahar başında azotlu gübre, çiçeklenme sonrası fosfor ve potasyum ağırlıklı gübre kullanılır. Sonbaharda organik gübre uygulanabilir.',
+        'propagation': 'Çelik veya aşı ile üretilir. İlkbahar aylarında yapılır.',
+        'repotting': 'Asmalar genellikle açık alanda yetiştirilir, saksı değiştirme gerekmez.',
+        'temperature': '15-30°C arası ideal sıcaklıktır. Kışın -15°C\'ye kadar dayanabilir.',
+        'humidity': '%50-70 nem aralığı uygundur.',
+        'co2': '400-600 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, derin toprak tercih edilir. pH 6.0-7.0 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve havalandırması iyi alanlar idealdir.',
+      },
+      // Kiraz
+      'kiraz': {
+        'description': 'Kiraz, yaz mevsiminin en sevilen meyvelerinden biridir. Antioksidan açısından zengindir.',
+        'watering': 'Genç ağaçlar daha sık sulanır. Yetişkin ağaçlar için toprak kurudukça sulama yapılır. Meyve oluşumu döneminde düzenli sulama önemlidir.',
+        'fertilizer': 'İlkbahar başında azotlu gübre, çiçeklenme sonrası fosfor ve potasyum ağırlıklı gübre kullanılır.',
+        'propagation': 'Aşı ile üretilir. Tohumdan yetiştirilenler genellikle meyve vermez.',
+        'repotting': 'Ağaçlar genellikle açık alanda yetiştirilir, saksı değiştirme gerekmez.',
+        'temperature': 'Kışın -25°C\'ye kadar dayanabilir. Yazın 20-25°C arası ideal sıcaklıktır.',
+        'humidity': '%50-70 nem aralığı uygundur.',
+        'co2': '400-600 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, derin toprak tercih edilir. pH 6.0-7.5 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve havalandırması iyi alanlar idealdir.',
+      },
+      // Şeftali
+      'şeftali': {
+        'description': 'Şeftali, yumuşak ve sulu meyvesiyle yaz mevsiminin vazgeçilmez meyvelerindendir. C vitamini açısından zengindir.',
+        'watering': 'Genç ağaçlar daha sık sulanır. Yetişkin ağaçlar için toprak kurudukça derin sulama yapılır. Meyve oluşumu döneminde düzenli sulama önemlidir.',
+        'fertilizer': 'İlkbahar başında azotlu gübre, çiçeklenme sonrası fosfor ve potasyum ağırlıklı gübre kullanılır.',
+        'propagation': 'Aşı ile üretilir. Tohumdan yetiştirilenler genellikle meyve vermez.',
+        'repotting': 'Ağaçlar genellikle açık alanda yetiştirilir, saksı değiştirme gerekmez.',
+        'temperature': 'Kışın -20°C\'ye kadar dayanabilir. Yazın 20-30°C arası ideal sıcaklıktır.',
+        'humidity': '%50-70 nem aralığı uygundur.',
+        'co2': '400-600 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, derin toprak tercih edilir. pH 6.0-7.0 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve havalandırması iyi alanlar idealdir.',
+      },
+      // Patates
+      'patates': {
+        'description': 'Patates, dünyada en çok tüketilen sebzelerden biridir. Karbonhidrat ve potasyum açısından zengindir.',
+        'watering': 'Toprak nemli tutulmalı, özellikle yumru oluşumu döneminde düzenli sulama yapılmalı. Haftada 2-3 kez sulanır.',
+        'fertilizer': 'Azot, fosfor ve potasyum içeren dengeli gübre kullanılır. Ekim öncesi toprak hazırlığında ve bitki gelişim döneminde gübreleme yapılır.',
+        'propagation': 'Tohum patates ile üretilir. İlkbahar aylarında (Mart-Nisan) ekim yapılır.',
+        'repotting': 'Patates genellikle açık alanda yetiştirilir, saksı değiştirme gerekmez.',
+        'temperature': '15-20°C arası ideal sıcaklıktır. Yumru oluşumu için serin hava gereklidir.',
+        'humidity': '%60-80 nem aralığı uygundur.',
+        'co2': '400-800 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, gevşek toprak tercih edilir. pH 5.0-6.0 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli alanlar idealdir.',
+      },
+      // Çilek
+      'çilek': {
+        'description': 'Çilek, yaz mevsiminin en sevilen meyvelerinden biridir. C vitamini ve antioksidan açısından çok zengindir.',
+        'watering': 'Toprak nemli tutulmalı, özellikle meyve oluşumu döneminde düzenli sulama yapılmalı. Haftada 2-3 kez sulanır.',
+        'fertilizer': 'Azot, fosfor ve potasyum içeren dengeli gübre kullanılır. İlkbahar başında ve meyve oluşumu döneminde gübreleme yapılır.',
+        'propagation': 'Yavru bitkiler (stolon) ile üretilir. İlkbahar veya sonbahar aylarında yapılır.',
+        'repotting': 'Her 2-3 yılda bir, ilkbahar aylarında saksı değiştirilebilir.',
+        'temperature': '15-25°C arası ideal sıcaklıktır. Kışın -10°C\'ye kadar dayanabilir.',
+        'humidity': '%60-80 nem aralığı uygundur.',
+        'co2': '400-800 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, organik maddece zengin toprak tercih edilir. pH 5.5-6.5 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli alanlar idealdir.',
+      },
+      // Portakal
+      'portakal': {
+        'description': 'Portakal, C vitamini açısından çok zengin bir turunçgil meyvesidir. Bağışıklık sistemini güçlendirir.',
+        'watering': 'Toprak kurudukça derin sulama yapılmalı. Yaz aylarında haftada 2-3 kez, kış aylarında daha az sulanır.',
+        'fertilizer': 'Azot, fosfor ve potasyum içeren dengeli turunçgil gübresi kullanılır. İlkbahar, yaz ve sonbahar aylarında gübreleme yapılır.',
+        'propagation': 'Aşı ile üretilir. Tohumdan yetiştirilenler genellikle meyve vermez.',
+        'repotting': 'Genç ağaçlar için her 2-3 yılda bir saksı değiştirilebilir.',
+        'temperature': '15-30°C arası ideal sıcaklıktır. Minimum -5°C\'nin altına düşmemelidir.',
+        'humidity': '%50-70 nem aralığı uygundur.',
+        'co2': '400-600 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, organik maddece zengin toprak tercih edilir. pH 6.0-7.5 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve korunaklı alanlar idealdir.',
+      },
+      // Limon
+      'limon': {
+        'description': 'Limon, C vitamini açısından çok zengin bir turunçgil meyvesidir. Mutfakta ve sağlık alanında yaygın olarak kullanılır.',
+        'watering': 'Toprak kurudukça derin sulama yapılmalı. Yaz aylarında haftada 2-3 kez, kış aylarında daha az sulanır.',
+        'fertilizer': 'Azot, fosfor ve potasyum içeren dengeli turunçgil gübresi kullanılır. İlkbahar, yaz ve sonbahar aylarında gübreleme yapılır.',
+        'propagation': 'Aşı ile üretilir. Tohumdan yetiştirilenler genellikle meyve vermez.',
+        'repotting': 'Genç ağaçlar için her 2-3 yılda bir saksı değiştirilebilir.',
+        'temperature': '15-30°C arası ideal sıcaklıktır. Minimum -5°C\'nin altına düşmemelidir.',
+        'humidity': '%50-70 nem aralığı uygundur.',
+        'co2': '400-600 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, organik maddece zengin toprak tercih edilir. pH 6.0-7.5 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve korunaklı alanlar idealdir.',
+      },
+      // Yaban Mersini
+      'yaban mersini': {
+        'description': 'Yaban mersini, antioksidan açısından çok zengin bir meyvedir. Sağlık açısından çok faydalıdır ve süper meyve olarak bilinir.',
+        'watering': 'Toprak sürekli nemli kalmalı ancak su birikintisi olmamalıdır. Özellikle meyve oluşumu döneminde düzenli sulama önemlidir. Yağmurlama yerine damla sulama tercih edilmelidir.',
+        'fertilizer': 'Yaban mersini için özel asidik gübreler kullanın. Organik gübreler (kompost, çam iğneleri) çok uygundur. Azot ihtiyacı düşüktür, potasyum ve fosfor önemlidir. Aşırı gübrelemeden kaçının.',
+        'propagation': 'Çelik veya yavru bitkiler ile üretilir. İlkbahar veya sonbahar aylarında yapılır.',
+        'repotting': 'Yaban mersini saksıda yetiştirilebilir. Kökler saksıyı doldurduğunda asidik toprak karışımı ile daha büyük saksıya alın. İyi drenaj çok önemlidir.',
+        'temperature': '15-25°C arası ideal sıcaklıktır. Kışın -20°C\'ye kadar dayanabilir.',
+        'humidity': '%60-80 nem aralığı uygundur.',
+        'co2': '400-600 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'Asidik toprak gerektirir (pH 4.5-5.5). İyi drene edilmiş, organik maddece zengin toprak tercih edilir. Çam iğneleri ve turba yosunu eklenebilir.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve havalandırması iyi alanlar idealdir.',
+      },
+      // Ahududu
+      'ahududu': {
+        'description': 'Ahududu, yaz mevsiminin en sevilen meyvelerinden biridir. C vitamini ve lif açısından zengindir.',
+        'watering': 'Toprak nemli kalmalı ancak su birikintisi olmamalıdır. Meyve oluşumu ve olgunlaşma döneminde daha sık sulama yapın. Yaprakları ıslatmadan toprağa doğrudan sulama yapın.',
+        'fertilizer': 'Ahududu için dengeli gübreler kullanın. İlkbahar başında azot, meyve oluşumundan önce potasyum ve fosfor ağırlıklı gübre uygulayın. Organik gübreler (kompost, gübre) çok uygundur.',
+        'propagation': 'Yavru bitkiler veya çelik ile üretilir. İlkbahar veya sonbahar aylarında yapılır.',
+        'repotting': 'Ahududu saksıda yetiştirilebilir ancak genellikle bahçede yetiştirilir. Kökler saksıyı doldurduğunda daha büyük saksıya alın. İyi drenaj çok önemlidir.',
+        'temperature': '15-25°C arası ideal sıcaklıktır. Kışın -20°C\'ye kadar dayanabilir.',
+        'humidity': '%60-80 nem aralığı uygundur.',
+        'co2': '400-600 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, organik maddece zengin toprak tercih edilir. pH 6.0-7.0 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve havalandırması iyi alanlar idealdir. Destek sistemi gerektirir.',
+      },
+      // Soya
+      'soya': {
+        'description': 'Soya, protein açısından çok zengin bir baklagil bitkisidir. Beslenme ve tarım açısından çok önemlidir.',
+        'watering': 'Özellikle çiçeklenme ve bakla oluşumu döneminde yeterli su çok önemlidir. Toprak kurumaya başladığında sulama yapın. Drip sulama sistemi idealdir.',
+        'fertilizer': 'Soya bitkileri azot fiksasyonu yapar, bu yüzden azot ihtiyacı düşüktür. Fosfor ve potasyum önemlidir. Ekim öncesi toprağa fosfor ve potasyum gübreleri karıştırın. Rhizobium bakterisi ile aşılanmış tohumlar kullanın.',
+        'propagation': 'Tohumla üretilir. İlkbahar aylarında (Nisan-Mayıs) ekim yapılır.',
+        'repotting': 'Soya bitkileri genellikle tarlada yetiştirilir. Saksıda yetiştirilebilir ancak derin kök yapısı nedeniyle büyük saksılar gerekir.',
+        'temperature': '20-30°C arası ideal sıcaklıktır. Minimum 10°C\'nin altına düşmemelidir.',
+        'humidity': '%60-80 nem aralığı uygundur.',
+        'co2': '400-1000 ppm arası normal seviyelerdir. Yüksek CO2 seviyesi verimi artırır.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, derin toprak tercih edilir. pH 6.0-7.0 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve havalandırması iyi alanlar idealdir.',
+      },
+      // Kabak
+      'kabak': {
+        'description': 'Kabak, düşük kalorili ve besleyici bir sebzedir. Yaz mevsiminin vazgeçilmez sebzelerindendir.',
+        'watering': 'Toprak kurumaya başladığında sulama yapın. Yaprakları ıslatmadan toprağa doğrudan sulama yapın. Özellikle meyve oluşumu döneminde düzenli sulama çok önemlidir. Sabah saatlerinde sulama yapın.',
+        'fertilizer': 'Kabak bitkileri için dengeli gübreler kullanın. Kompost ve organik gübreler çok uygundur. Fosfor çiçeklenme için, potasyum meyve kalitesi için önemlidir. Aşırı azot yaprak gelişimini artırır ancak meyve üretimini azaltır.',
+        'propagation': 'Tohumla üretilir. Nisan-Mayıs aylarında doğrudan toprağa ekilebilir.',
+        'repotting': 'Kabak bitkileri genellikle bahçede yetiştirilir. Saksıda yetiştirilebilir ancak büyük saksılar gerekir.',
+        'temperature': '18-25°C arası ideal sıcaklıktır. Minimum 15°C\'nin altına düşmemelidir.',
+        'humidity': '%60-80 nem aralığı uygundur.',
+        'co2': '400-800 ppm arası normal seviyelerdir.',
+        'light': 'Tam güneş ışığı gerektirir. Günde en az 6-8 saat direkt güneş ışığı almalıdır.',
+        'soil': 'İyi drene edilmiş, organik maddece zengin toprak tercih edilir. pH 6.0-7.0 arası uygundur.',
+        'location': 'Güney veya güneydoğu cepheli, güneşli ve havalandırması iyi alanlar idealdir.',
+      },
+    };
+    
+    // Bitki türünü normalize et ve eşleştir
+    // Önce tam eşleşme kontrolü
+    for (var key in plantDatabase.keys) {
+      if (normalizedType == key || normalizedType.contains(key) || key.contains(normalizedType)) {
+        return plantDatabase[key]!;
+      }
+    }
+    
+    // İngilizce isimlerle eşleştirme (blueberry, raspberry, soybean, squash, pepper)
+    final englishToTurkish = {
+      'blueberry': 'yaban mersini',
+      'raspberry': 'ahududu',
+      'soybean': 'soya',
+      'squash': 'kabak',
+      'pepper': 'biber',
+      'bell_pepper': 'biber',
+      'pepper,_bell': 'biber',
+      'pepper, bell': 'biber',
+    };
+    
+    for (var englishKey in englishToTurkish.keys) {
+      if (normalizedType.contains(englishKey)) {
+        final turkishKey = englishToTurkish[englishKey];
+        if (plantDatabase.containsKey(turkishKey)) {
+          return plantDatabase[turkishKey]!;
+        }
+      }
+    }
+    
+    // Eğer hala eşleşme yoksa, normalize edilmiş İngilizce ismi kontrol et
+    final normalizedEnglishLower = normalizedEnglish.toLowerCase().trim();
+    for (var englishKey in englishToTurkish.keys) {
+      if (normalizedEnglishLower.contains(englishKey)) {
+        final turkishKey = englishToTurkish[englishKey];
+        if (plantDatabase.containsKey(turkishKey)) {
+          return plantDatabase[turkishKey]!;
+        }
+      }
+    }
+    
+    // Eşleşme bulunamazsa varsayılan bilgiler
+    return {
+      'description': '$plantType hakkında detaylı bilgi için bitki türünü doğru şekilde tanımlayın.',
+      'watering': 'Toprak nemine göre düzenli sulama yapılmalıdır.',
+      'fertilizer': 'Bitki türüne uygun dengeli gübre kullanılmalıdır.',
+      'propagation': 'Tohum veya çelik ile üretilebilir.',
+      'repotting': 'Gerekirse ilkbahar aylarında saksı değiştirilebilir.',
+      'temperature': '15-25°C arası genel olarak uygun sıcaklıktır.',
+      'humidity': '%50-70 nem aralığı genel olarak uygundur.',
+      'co2': '400-600 ppm arası normal seviyelerdir.',
+      'light': 'Bitki türüne göre güneş ışığı ihtiyacı değişir.',
+      'soil': 'İyi drene edilmiş toprak tercih edilir.',
+      'location': 'Bitki türüne uygun konum seçilmelidir.',
+    };
   }
 
   // Bakım Detayları Bölümü
@@ -2965,6 +4797,9 @@ const Map<String, String> _plantTypeTranslations = {
   'Grape': 'Üzüm',
   'Peach': 'Şeftali',
   'Pepper': 'Biber',
+  'Pepper,_bell': 'Biber',
+  'Pepper, bell': 'Biber',
+  'bell_pepper': 'Biber',
   'Potato': 'Patates',
   'Strawberry': 'Çilek',
   'Tomato': 'Domates',
@@ -2975,6 +4810,29 @@ const Map<String, String> _plantTypeTranslations = {
   'Orange': 'Portakal',
   'Citrus': 'Turunçgil',
 };
+
+// Bitki türü normalize fonksiyonu
+String _normalizePlantType(String rawType) {
+  // Virgül ve alt çizgi ile ayrılmış formatları normalize et
+  var normalized = rawType.trim();
+  
+  // "Pepper,_bell" veya "Pepper, bell" -> "Pepper"
+  if (normalized.toLowerCase().contains('pepper')) {
+    if (normalized.contains(',') || normalized.contains('_')) {
+      normalized = 'Pepper';
+    }
+  }
+  
+  // "Corn_(maize)" -> "Corn"
+  if (normalized.contains('(')) {
+    normalized = normalized.split('(')[0].trim();
+  }
+  
+  // Alt çizgileri temizle
+  normalized = normalized.replaceAll(RegExp(r'_+$'), '').trim();
+  
+  return normalized;
+}
 
 // Disease translations (plant_scan_page.dart'tan)
 const Map<String, String> _plantVillageDiseaseTranslations = {
@@ -3143,14 +5001,18 @@ ${plantInfo ?? ''}
 
 ÖNEMLİ KURALLAR:
 1. İlk mesajda sadece 2-3 cümle kısa özet ver (bitki durumu ve en önemli nokta)
-2. Bakım önerilerinde MUTLAKA spesifik zaman aralıkları kullan:
-   - "21 günde bir", "3 ayda bir", "haftada 2 kez", "15 gün arayla" örnekleri gibi o bitkiye ve hastalığa göre uygun ifadeyi kullan
+2. Bakım önerilerinde MUTLAKA spesifik zaman aralıkları kullan, ancak bu zaman aralıkları bitki türüne ve hastalığa ÖZEL olmalı:
+   - Her bitki türü için (Elma, Domates, Mısır, vb.) o bitkiye özgü gerçek bakım programı kullan
+   - Her hastalık için (Elma Kabuğu, Yaprak Yanıklığı, vb.) o hastalığa özgü tedavi programı kullan
+   - Türk tarım literatüründen araştırılmış, gerçek zaman aralıkları ver (örnek: "21 günde bir" sadece bir örnekti, sen gerçek bilgileri kullan)
    - Genel ifadeler kullanma ("düzenli", "sık sık" gibi)
-3. Her bitki ve hastalık için Türk tarım literatüründen araştırılmış, spesifik bilgiler ver
+   - Örnek verme, gerçek bilgileri kullan
+3. Her bitki ve hastalık için Türk tarım literatüründen araştırılmış, spesifik ve doğru bilgiler ver
 4. Kısa, net ve pratik cevaplar ver
 5. Türkçe olarak, samimi ama profesyonel bir dil kullan
 6. Analiz geçmişine bakarak bitkinin durumunu değerlendir ve spesifik öneriler sun
-7. Cevaplarında uygun yerlerde emoji kullan (🌱 🌿 💧 ☀️ 🌡️ ⚠️ ✅ ❌ 🔍 📅 gibi), ancak aşırıya kaçma''';
+7. Cevaplarında uygun yerlerde emoji kullan (🌱 🌿 💧 ☀️ 🌡️ ⚠️ ✅ ❌ 🔍 📅 gibi), ancak aşırıya kaçma
+8. ÖNEMLİ: Yukarıdaki "21 günde bir, 3 ayda bir" gibi ifadeler sadece ÖRNEKTİ. Sen her bitki ve hastalık için gerçek, araştırılmış zaman aralıklarını kullan. Örneğin Elma için farklı, Domates için farklı, Mısır için farklı zaman aralıkları olmalı.''';
 
       final messages = [
         {'role': 'system', 'content': systemPrompt},
@@ -3355,14 +5217,11 @@ ${plantInfo ?? ''}
             child: Row(
               children: [
                 // Sohbeti Kaydet butonu
-                TextButton.icon(
+                IconButton(
                   onPressed: _messages.isNotEmpty ? _saveChat : null,
-                  icon: const Icon(Icons.bookmark_outline, size: 18),
-                  label: const Text('Sohbeti Kaydet'),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.primary,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  ),
+                  icon: const Icon(Icons.bookmark_outline),
+                  tooltip: 'Sohbeti Kaydet',
+                  color: AppColors.primary,
                 ),
                 const Spacer(),
                 Text(
@@ -3402,14 +5261,43 @@ ${plantInfo ?? ''}
                     },
                   ),
           ),
-          // Input
+          // Hızlı Mesaj Baloncukları
           Container(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
               color: AppColors.cardBackground,
               border: Border(
                 top: BorderSide(color: AppColors.border, width: 1),
               ),
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _buildQuickMessageBubble(
+                    'Bitkimin durumu ne?',
+                    () {
+                      _messageController.text = 'Bitkimin durumu ne?';
+                      _sendMessage();
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  _buildQuickMessageBubble(
+                    'Bakım rutini nasıl olmalı?',
+                    () {
+                      _messageController.text = 'Bakım rutini nasıl olmalı?';
+                      _sendMessage();
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Input
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.cardBackground,
             ),
             child: Row(
               children: [
@@ -3443,6 +5331,31 @@ ${plantInfo ?? ''}
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildQuickMessageBubble(String text, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: AppColors.primary.withOpacity(0.3),
+            width: 1,
+          ),
+        ),
+        child: Text(
+          text,
+          style: TextStyle(
+            color: AppColors.primary,
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
       ),
     );
   }
@@ -3503,5 +5416,48 @@ ${plantInfo ?? ''}
       ),
     );
   }
+}
+
+// Kontrol ikonu painter (üç yatay çizgi ve her birinin sağında küçük daire)
+class _ControlIconPainter extends CustomPainter {
+  final Color color;
+
+  _ControlIconPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final dotPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    final lineSpacing = size.height / 4;
+    final lineLength = size.width * 0.6;
+    final dotRadius = 2.0;
+    final startX = 0.0;
+    final startY = lineSpacing;
+
+    // Üç yatay çizgi çiz
+    for (int i = 0; i < 3; i++) {
+      final y = startY + (i * lineSpacing);
+      final lineStart = Offset(startX, y);
+      final lineEnd = Offset(startX + lineLength, y);
+      
+      // Çizgiyi çiz
+      canvas.drawLine(lineStart, lineEnd, paint);
+      
+      // Çizginin sağında küçük daire çiz
+      final dotCenter = Offset(startX + lineLength + dotRadius + 2, y);
+      canvas.drawCircle(dotCenter, dotRadius, dotPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 

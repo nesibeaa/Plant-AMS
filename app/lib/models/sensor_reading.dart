@@ -17,21 +17,26 @@ class SensorPoint {
       // Bucket formatını parse et - "2025-11-03 11:00:00" formatını handle et
       DateTime time;
       try {
-        // "2025-11-03 11:00:00" formatını parse et (local time olarak)
-        // Eğer UTC formatında geliyorsa parse edip local'e çevir
+        // Backend'den gelen bucket string'i parse et
         if (bucketStr.contains('T') && bucketStr.contains('Z')) {
-          // ISO 8601 UTC formatı
-          time = DateTime.parse(bucketStr).toLocal();
+          // ISO 8601 UTC formatı: "2026-01-02T01:00:00Z"
+          final utcTime = DateTime.parse(bucketStr).toUtc();
+          // UTC'den Türkiye saatine çevir (+3 saat)
+          time = utcTime.add(const Duration(hours: 3));
         } else {
-          // "2025-11-03 11:00:00" formatı - local time olarak varsay
-          time = DateTime.parse(bucketStr);
-          // Eğer UTC ise local'e çevir
-          if (time.isUtc) {
-            time = time.toLocal();
+          // "2025-11-03 11:00:00" formatı - backend bu formatı kullanmıyor ama yine de handle et
+          // Eğer bu format gelirse, UTC olduğunu varsayıp Türkiye saatine çevir
+          try {
+            final utcTime = DateTime.parse(bucketStr + 'Z').toUtc();
+            time = utcTime.add(const Duration(hours: 3));
+          } catch (_) {
+            // Parse edilemezse normal parse dene
+            time = DateTime.parse(bucketStr);
           }
         }
       } catch (e) {
         // Parse edilemezse şu anki zamanı kullan
+        print('⚠️ SensorPoint.fromJson: Parse hatası: $e, bucket: $bucketStr');
         time = DateTime.now();
       }
       

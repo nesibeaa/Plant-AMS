@@ -4,9 +4,11 @@ import 'dart:convert';
 import 'dart:io';
 import '../theme/app_theme.dart';
 import 'plant_detail_page.dart';
+import '../../services/notification_service.dart';
 
 class PlantsPage extends StatefulWidget {
-  const PlantsPage({super.key});
+  final bool showHistory;
+  const PlantsPage({super.key, this.showHistory = false});
   @override
   State<PlantsPage> createState() => _PlantsPageState();
 }
@@ -16,26 +18,20 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
   List<Map<String, dynamic>> _deletedPlants = [];
   Set<String> _favoriteIds = {};
   bool _isLoading = true;
-  int _selectedTab = 0; // 0: Benim Bahçem, 1: Snap Geçmişi
+  int _selectedTab = 0; // 0: Benim Bahçem (artık sadece bu var)
   bool _showFavoritesOnly = false;
-  late TabController _tabController;
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  Set<String> _selectedPlantIds = {}; // Seçili bitki ID'leri
+  bool _isSelectionMode = false; // Seçim modu aktif mi?
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
-    _tabController.addListener(() {
-      setState(() {
-        _selectedTab = _tabController.index;
-      });
-    });
+    if (widget.showHistory) {
+      _selectedTab = 1;
+    }
     _loadData();
-  }
-
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
   }
 
   @override
@@ -103,6 +99,11 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
       // Bitkiyi bul
       final plant = _savedPlants.firstWhere((p) => p['id'] == id);
       
+      // Bildirimleri iptal et
+      final notificationService = NotificationService();
+      await notificationService.cancelNotification(id, 'watering');
+      await notificationService.cancelNotification(id, 'fertilization');
+      
       // Aktif listeden kaldır
       _savedPlants.removeWhere((plant) => plant['id'] == id);
       await prefs.setString('saved_plants', jsonEncode(_savedPlants));
@@ -145,6 +146,11 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
     try {
       final prefs = await SharedPreferences.getInstance();
       
+      // Bildirimleri iptal et
+      final notificationService = NotificationService();
+      await notificationService.cancelNotification(id, 'watering');
+      await notificationService.cancelNotification(id, 'fertilization');
+      
       // Geçmişten kaldır
       _deletedPlants.removeWhere((plant) => plant['id'] == id);
       await prefs.setString('deleted_plants', jsonEncode(_deletedPlants));
@@ -179,14 +185,28 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
     }
   }
 
+  // Bitkileri filtrele (arama, favori, sekme)
   List<Map<String, dynamic>> get _displayedPlants {
     final plants = _selectedTab == 0 ? _savedPlants : _deletedPlants;
     List<Map<String, dynamic>> filteredPlants;
     
+    // Favori filtresi
     if (_selectedTab == 0 && _showFavoritesOnly) {
       filteredPlants = plants.where((plant) => _favoriteIds.contains(plant['id'])).toList();
     } else {
       filteredPlants = List.from(plants);
+    }
+    
+    // Arama filtresi
+    if (_searchQuery.isNotEmpty) {
+      filteredPlants = filteredPlants.where((plant) {
+        final nickname = (plant['name'] as String? ?? '').toLowerCase();
+        final plantType = (plant['originalPlantType'] as String? ?? 
+                          plant['plantType'] as String? ?? '').toLowerCase();
+        
+        // Bitki türü ismi veya nickname'e göre ara
+        return nickname.contains(_searchQuery) || plantType.contains(_searchQuery);
+      }).toList();
     }
     
     // savedAt tarihine göre sırala (en yeni en üstte)
@@ -211,17 +231,81 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
         color: AppColors.primary,
         child: Column(
           children: [
-            const SizedBox(height: 8),
-            // Tab Bar
-            TabBar(
-              controller: _tabController,
-              indicatorColor: AppColors.primary,
-              labelColor: AppColors.primary,
-              unselectedLabelColor: AppColors.textSecondary,
-              tabs: const [
-                Tab(text: 'Benim Bahçem'),
-                Tab(text: 'Geçmiş'),
-              ],
+            const SizedBox(height: 2),
+            // Başlık - Ortalanmış
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 2, 16, 0),
+              child: Stack(
+                children: [
+                  Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Yazı
+                          Text(
+                            _selectedTab == 0 ? 'Bahçem' : 'Geçmiş',
+                            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.primaryDark,
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          // Sağ ikon
+                          Image.asset(
+                            'assets/icon/Bahçe.png',
+                            width: 24,
+                            height: 24,
+                            errorBuilder: (context, error, stackTrace) {
+                              return Icon(
+                                Icons.local_florist,
+                                size: 24,
+                                color: AppColors.primary,
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // Kapatma butonu (sadece geçmiş sayfasında)
+                  if (widget.showHistory || _selectedTab == 1)
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.of(context).pop();
+                          },
+                          borderRadius: BorderRadius.circular(12),
+                          child: Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: AppColors.cardBackground,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: AppColors.border),
+                            ),
+                            child: Icon(
+                              Icons.close,
+                              color: AppColors.textSecondary,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
             // Arama çubuğu ve filtreler
             Padding(
@@ -234,25 +318,74 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
                       decoration: BoxDecoration(
                         color: AppColors.cardBackground,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.border),
+                        border: Border.all(
+                          color: _searchQuery.isNotEmpty 
+                              ? AppColors.primary.withOpacity(0.3)
+                              : AppColors.border,
+                          width: _searchQuery.isNotEmpty ? 1.5 : 1,
+                        ),
+                        boxShadow: _searchQuery.isNotEmpty
+                            ? [
+                                BoxShadow(
+                                  color: AppColors.primary.withOpacity(0.1),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ]
+                            : null,
                       ),
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                       child: Row(
                         children: [
-                          Icon(Icons.search, color: AppColors.textSecondary, size: 20),
+                          Icon(
+                            Icons.search,
+                            color: _searchQuery.isNotEmpty 
+                                ? AppColors.primary
+                                : AppColors.textSecondary,
+                            size: 20,
+                          ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: TextField(
+                              controller: _searchController,
                               decoration: InputDecoration(
-                                hintText: 'Bitkileri ara',
-                                hintStyle: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                                hintText: 'Bitki türü veya isim ara...',
+                                hintStyle: TextStyle(
+                                  color: AppColors.textSecondary,
+                                  fontSize: 14,
+                                ),
                                 border: InputBorder.none,
                                 isDense: true,
-                                contentPadding: EdgeInsets.zero,
+                                contentPadding: const EdgeInsets.symmetric(vertical: 8),
                               ),
-                              style: TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                              style: TextStyle(
+                                color: AppColors.textPrimary,
+                                fontSize: 14,
+                              ),
+                              onChanged: (value) {
+                                setState(() {
+                                  _searchQuery = value.toLowerCase().trim();
+                                });
+                              },
                             ),
                           ),
+                          if (_searchQuery.isNotEmpty)
+                            GestureDetector(
+                              onTap: () {
+                                _searchController.clear();
+                                setState(() {
+                                  _searchQuery = '';
+                                });
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                child: Icon(
+                                  Icons.close,
+                                  color: AppColors.textSecondary,
+                                  size: 18,
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -289,40 +422,158 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
                         ),
                       ),
                     ),
-                  // Diğer ikonlar
+                  // Üç nokta menü
                   const SizedBox(width: 8),
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: AppColors.cardBackground,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.border),
+                  PopupMenuButton<String>(
+                    icon: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: AppColors.cardBackground,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.border),
+                      ),
+                      child: Icon(
+                        Icons.more_vert,
+                        color: AppColors.textSecondary,
+                        size: 20,
+                      ),
                     ),
-                    child: Icon(
-                      Icons.access_time,
-                      color: AppColors.textSecondary,
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: AppColors.cardBackground,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppColors.border),
-                    ),
-                    child: Icon(
-                      Icons.more_vert,
-                      color: AppColors.textSecondary,
-                      size: 20,
-                    ),
+                    onSelected: (value) {
+                      if (value == 'select') {
+                        setState(() {
+                          _isSelectionMode = true;
+                        });
+                      } else if (value == 'delete_selected') {
+                        _showDeleteSelectedDialog();
+                      } else if (value == 'remove_selected') {
+                        _showRemoveSelectedDialog();
+                      }
+                    },
+                    itemBuilder: (context) => [
+                      if (!_isSelectionMode)
+                        PopupMenuItem(
+                          value: 'select',
+                          child: Row(
+                            children: [
+                              Icon(Icons.check_circle_outline, size: 20, color: AppColors.primary),
+                              const SizedBox(width: 12),
+                              const Text(
+                                'Seç',
+                                style: TextStyle(fontWeight: FontWeight.w500),
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (_isSelectionMode && _selectedPlantIds.isNotEmpty)
+                        PopupMenuItem(
+                          value: _selectedTab == 0 ? 'delete_selected' : 'remove_selected',
+                          child: Row(
+                            children: [
+                              Icon(
+                                _selectedTab == 0 ? Icons.delete_outline : Icons.delete_forever,
+                                size: 20,
+                                color: AppColors.danger,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                _selectedTab == 0 ? 'Seçilenleri sil' : 'Seçilenleri kaldır',
+                                style: TextStyle(color: AppColors.danger),
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (_isSelectionMode)
+                        PopupMenuItem(
+                          value: 'cancel_selection',
+                          onTap: () {
+                            Future.delayed(Duration.zero, () {
+                              setState(() {
+                                _isSelectionMode = false;
+                                _selectedPlantIds.clear();
+                              });
+                            });
+                          },
+                          child: Row(
+                            children: [
+                              Icon(Icons.close, size: 20, color: AppColors.textSecondary),
+                              const SizedBox(width: 8),
+                              const Text('Seçimi iptal et'),
+                            ],
+                          ),
+                        ),
+                    ],
                   ),
                 ],
               ),
             ),
+            // Seçim modu bilgi çubuğu
+            if (_isSelectionMode)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.1),
+                  border: Border(
+                    bottom: BorderSide(color: AppColors.border),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.check_circle, color: AppColors.primary, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${_selectedPlantIds.length} bitki seçildi',
+                      style: TextStyle(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (_selectedPlantIds.isNotEmpty)
+                      TextButton.icon(
+                        onPressed: () {
+                          if (_selectedTab == 0) {
+                            _showDeleteSelectedDialog();
+                          } else {
+                            _showRemoveSelectedDialog();
+                          }
+                        },
+                        icon: Icon(
+                          _selectedTab == 0 ? Icons.delete_outline : Icons.delete_forever,
+                          size: 18,
+                          color: AppColors.danger,
+                        ),
+                        label: Text(
+                          _selectedTab == 0 ? 'Sil' : 'Kaldır',
+                          style: TextStyle(
+                            color: AppColors.danger,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        ),
+                      ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _isSelectionMode = false;
+                          _selectedPlantIds.clear();
+                        });
+                      },
+                      child: Text(
+                        'İptal',
+                        style: TextStyle(
+                          color: AppColors.textSecondary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             // İçerik
             Expanded(
               child: _isLoading
@@ -349,16 +600,23 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
   }
 
   Widget _buildEmptyState() {
-    final message = _selectedTab == 0
-        ? (_showFavoritesOnly 
-            ? 'Henüz favori bitki yok'
-            : 'Henüz bitki kaydedilmedi')
-        : 'Geçmişte bitki yok';
-    final subtitle = _selectedTab == 0
-        ? (_showFavoritesOnly
-            ? 'Bitkilere kalp işaretine basarak favorileyebilirsiniz'
-            : 'Analiz sayfasından bitki analizi yapıp kaydedebilirsiniz')
-        : 'Silinen bitkiler burada görünecek';
+    String message;
+    String subtitle;
+    
+    if (_searchQuery.isNotEmpty) {
+      message = 'Arama sonucu bulunamadı';
+      subtitle = 'Farklı bir arama terimi deneyin';
+    } else if (_selectedTab == 0) {
+      message = _showFavoritesOnly 
+          ? 'Henüz favori bitki yok'
+          : 'Henüz bitki kaydedilmedi';
+      subtitle = _showFavoritesOnly
+          ? 'Bitkilere kalp işaretine basarak favorileyebilirsiniz'
+          : 'Analiz sayfasından bitki analizi yapıp kaydedebilirsiniz';
+    } else {
+      message = 'Geçmişte bitki yok';
+      subtitle = 'Silinen bitkiler burada görünecek';
+    }
 
     return SingleChildScrollView(
       physics: const AlwaysScrollableScrollPhysics(
@@ -415,15 +673,33 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
       diseaseName = disease;
     }
 
+    final isSelected = _selectedPlantIds.contains(plantId);
+    
     return InkWell(
       onTap: () async {
-        final result = await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => PlantDetailPage(plant: plant),
-          ),
-        );
-        if (result == true) {
-          _loadData(); // Bitki güncellendiğinde listeyi yenile
+        if (_isSelectionMode) {
+          // Seçim modunda: bitkiyi seç/seçimi kaldır
+          setState(() {
+            if (isSelected) {
+              _selectedPlantIds.remove(plantId);
+            } else {
+              _selectedPlantIds.add(plantId);
+            }
+            // Eğer hiç seçili bitki kalmadıysa seçim modunu kapat
+            if (_selectedPlantIds.isEmpty) {
+              _isSelectionMode = false;
+            }
+          });
+        } else {
+          // Normal modda: bitki detay sayfasına git
+          final result = await Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => PlantDetailPage(plant: plant),
+            ),
+          );
+          if (result == true) {
+            _loadData(); // Bitki güncellendiğinde listeyi yenile
+          }
         }
       },
       borderRadius: BorderRadius.circular(16),
@@ -432,10 +708,22 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
         decoration: BoxDecoration(
           color: AppColors.cardBackground,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.border),
+          border: _isSelectionMode && isSelected
+              ? Border.all(color: AppColors.primary, width: 2)
+              : Border.all(color: AppColors.border),
         ),
         child: Row(
           children: [
+            // Seçim checkbox (seçim modunda)
+            if (_isSelectionMode)
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Icon(
+                  isSelected ? Icons.check_circle : Icons.circle_outlined,
+                  color: isSelected ? AppColors.primary : AppColors.textSecondary,
+                  size: 24,
+                ),
+              ),
             // Bitki resmi veya ikon
             Container(
               width: 80,
@@ -535,8 +823,8 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
                 ),
               ),
             ),
-            // Favori butonu (sadece aktif listede)
-            if (_selectedTab == 0)
+            // Favori butonu (sadece aktif listede ve seçim modu kapalıyken)
+            if (_selectedTab == 0 && !_isSelectionMode)
               IconButton(
                 icon: Icon(
                   isFavorite ? Icons.favorite : Icons.favorite_border,
@@ -544,16 +832,15 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
                 ),
                 onPressed: () => _toggleFavorite(plantId),
               ),
-            // Silme butonu
-            IconButton(
-              icon: Icon(
-                _selectedTab == 0 ? Icons.delete_outline : Icons.delete_forever,
-                color: AppColors.danger,
+            // Silme butonu (sadece Geçmiş sekmesinde ve seçim modu kapalıyken göster)
+            if (_selectedTab == 1 && !_isSelectionMode)
+              IconButton(
+                icon: Icon(
+                  Icons.delete_forever,
+                  color: AppColors.danger,
+                ),
+                onPressed: () => _showDeletePermanentlyDialog(plantId),
               ),
-              onPressed: () => _selectedTab == 0
-                  ? _showMoveToHistoryDialog(plantId)
-                  : _showDeletePermanentlyDialog(plantId),
-            ),
           ],
         ),
       ),
@@ -618,5 +905,129 @@ class _PlantsPageState extends State<PlantsPage> with SingleTickerProviderStateM
         ],
       ),
     );
+  }
+
+  void _showDeleteSelectedDialog() {
+    if (_selectedPlantIds.isEmpty) return;
+    
+    final count = _selectedPlantIds.length;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Seçilen Bitkileri Sil'),
+        content: Text('$count bitkiyi geçmişe taşımak istediğinize emin misiniz?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(
+              'İptal',
+              style: TextStyle(color: AppColors.textSecondary),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _deleteSelected();
+            },
+            child: Text(
+              'Sil',
+              style: TextStyle(color: AppColors.primary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showRemoveSelectedDialog() {
+    if (_selectedPlantIds.isEmpty) return;
+    
+    final count = _selectedPlantIds.length;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Seçilen Bitkileri Kaldır'),
+        content: Text('$count bitkiyi kalıcı olarak silmek istediğinize emin misiniz? Bu işlem geri alınamaz.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(
+              'İptal',
+              style: TextStyle(color: AppColors.textSecondary),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _removeSelected();
+            },
+            child: Text(
+              'Kaldır',
+              style: TextStyle(color: AppColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteSelected() async {
+    try {
+      final count = _selectedPlantIds.length;
+      final selectedIds = List<String>.from(_selectedPlantIds);
+      
+      for (String plantId in selectedIds) {
+        await _moveToHistory(plantId);
+      }
+      
+      setState(() {
+        _selectedPlantIds.clear();
+        _isSelectionMode = false;
+      });
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$count bitki geçmişe taşındı'),
+            backgroundColor: AppColors.primary,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Seçilen bitkileri silme hatası: $e');
+    }
+  }
+
+  Future<void> _removeSelected() async {
+    try {
+      final count = _selectedPlantIds.length;
+      final selectedIds = List<String>.from(_selectedPlantIds);
+      
+      for (String plantId in selectedIds) {
+        await _deletePermanently(plantId);
+      }
+      
+      setState(() {
+        _selectedPlantIds.clear();
+        _isSelectionMode = false;
+      });
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$count bitki kalıcı olarak silindi'),
+            backgroundColor: AppColors.primary,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        );
+      }
+    } catch (e) {
+      print('❌ Seçilen bitkileri kaldırma hatası: $e');
+    }
   }
 }

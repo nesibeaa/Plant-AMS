@@ -1,10 +1,14 @@
 import 'dart:math' as math;
+import 'dart:io';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../state/app_state.dart';
 import '../../models/sensor_reading.dart';
+import '../../services/api_service.dart';
 import '../theme/app_theme.dart';
 
 class StatsPage extends StatefulWidget {
@@ -16,7 +20,6 @@ class StatsPage extends StatefulWidget {
 
 class _StatsPageState extends State<StatsPage> {
   int _selectedSensorIndex = 0; // 0: Temp, 1: Humidity, 2: CO2
-  int _selectedRangeIndex = 0; // 0: 24h, 1: 7d
 
   @override
   void initState() {
@@ -68,7 +71,7 @@ class _StatsPageState extends State<StatsPage> {
         chartAreaColor = AppColors.tempColor.withOpacity(0.14);
         chartUnit = '°C';
         chartTitle = 'Sıcaklık';
-        chartSubtitle = 'Eşik: 18–28°C';
+        chartSubtitle = '';
         minThreshold = 18;
         maxThreshold = 28;
         break;
@@ -78,7 +81,7 @@ class _StatsPageState extends State<StatsPage> {
         chartAreaColor = AppColors.humidityColor.withOpacity(0.16);
         chartUnit = '%';
         chartTitle = 'Nem';
-        chartSubtitle = 'Eşik: 40–70%';
+        chartSubtitle = '';
         minThreshold = 40;
         maxThreshold = 70;
         break;
@@ -88,7 +91,7 @@ class _StatsPageState extends State<StatsPage> {
         chartAreaColor = AppColors.co2Color.withOpacity(0.16);
         chartUnit = 'ppm';
         chartTitle = 'CO₂';
-        chartSubtitle = 'Eşik: 400–1000 ppm';
+        chartSubtitle = '';
         minThreshold = 400;
         maxThreshold = 1000;
         break;
@@ -103,11 +106,12 @@ class _StatsPageState extends State<StatsPage> {
         maxThreshold = 0;
     }
 
-    // Filter by range
+    // Filter by range (24 saat)
     final now = DateTime.now();
-    final filteredPoints = _selectedRangeIndex == 0
-        ? currentPoints.where((p) => now.difference(p.time).inHours <= 24).toList()
-        : currentPoints.where((p) => now.difference(p.time).inDays <= 7).toList();
+    final filteredPoints = currentPoints.where((p) => now.difference(p.time).inHours <= 24).toList();
+
+    // Verileri grafik için optimize et (çok fazla nokta varsa örnekle)
+    final displayPoints = _downsampleData(filteredPoints, true);
 
     final values = filteredPoints.map((p) => p.value).toList();
     final minValue = values.isEmpty ? 0.0 : values.reduce((a, b) => a < b ? a : b);
@@ -153,42 +157,189 @@ class _StatsPageState extends State<StatsPage> {
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          // Range Tabs
-          Row(
-            children: [
-              _RangeTab(
-                label: '24 Saat',
-                isActive: _selectedRangeIndex == 0,
-                onTap: () => setState(() => _selectedRangeIndex = 0),
-              ),
-              const SizedBox(width: 8),
-              _RangeTab(
-                label: '7 Gün',
-                isActive: _selectedRangeIndex == 1,
-                onTap: () => setState(() => _selectedRangeIndex = 1),
-              ),
-            ],
-          ),
           const SizedBox(height: 20),
           _ChartCard(
             title: chartTitle,
             subtitle: chartSubtitle,
             color: chartColor,
             areaColor: chartAreaColor,
-            points: filteredPoints,
+            points: displayPoints,
             unit: chartUnit,
             minThreshold: minThreshold,
             maxThreshold: maxThreshold,
             minValue: minValue,
             maxValue: maxValue,
             avgValue: avgValue,
-            is24Hour: _selectedRangeIndex == 0,
+            is24Hour: true,
+          ),
+          const SizedBox(height: 24),
+          // Rapor Al Butonu
+          _ExportReportButton(
+            onPressed: () => _exportToCSV(context),
           ),
           const SizedBox(height: 24),
         ],
       ),
     );
+  }
+
+  Future<void> _exportToCSV(BuildContext context) async {
+    // Loading dialog'u göster
+    if (!context.mounted) return;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black54,
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: Center(
+          child: Card(
+            color: AppColors.cardBackground,
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Rapor oluşturuluyor...',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final apiService = ApiService();
+      
+      // Tüm sensör verilerini çek
+      final allReadings = await apiService.getAllReadingsForExport();
+      
+      // Dialog'u kapat
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      
+      if (allReadings.isEmpty) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Export edilecek veri bulunamadı')),
+          );
+        }
+        return;
+      }
+
+      // CSV formatına çevir
+      final csvContent = _generateCSV(allReadings);
+      
+      // Geçici dosya oluştur
+      final directory = await getTemporaryDirectory();
+      final timestamp = DateFormat('yyyy-MM-dd_HH-mm-ss').format(DateTime.now());
+      final file = File('${directory.path}/sensor_raporu_$timestamp.csv');
+      await file.writeAsString(csvContent);
+      
+      // Share sheet'i göster
+      if (context.mounted) {
+        await Share.shareXFiles(
+          [XFile(file.path)],
+          text: 'Sensör Verileri Raporu',
+          subject: 'Sensor Raporu',
+        );
+      }
+    } catch (e) {
+      // Dialog'u kapat
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Rapor oluşturulurken hata oluştu: $e'),
+            backgroundColor: AppColors.danger,
+          ),
+        );
+      }
+    }
+  }
+
+  String _generateCSV(List<Map<String, dynamic>> readings) {
+    final buffer = StringBuffer();
+    
+    // CSV Header
+    buffer.writeln('Tarih, Saat, Sensör ID, Tip, Değer');
+    
+    // Verileri sırala (zaman sırasına göre)
+    final sortedReadings = List<Map<String, dynamic>>.from(readings);
+    sortedReadings.sort((a, b) {
+      final aTs = DateTime.parse(a['ts'] as String);
+      final bTs = DateTime.parse(b['ts'] as String);
+      return aTs.compareTo(bTs);
+    });
+    
+    // CSV satırları
+    for (final reading in sortedReadings) {
+      try {
+        final tsStr = reading['ts'] as String;
+        DateTime ts;
+        if (tsStr.endsWith('Z')) {
+          ts = DateTime.parse(tsStr).toUtc();
+        } else {
+          ts = DateTime.parse(tsStr + 'Z').toUtc();
+        }
+        // UTC'den Türkiye saatine çevir
+        final turkeyTime = ts.add(const Duration(hours: 3));
+        
+        final date = DateFormat('yyyy-MM-dd').format(turkeyTime);
+        final time = DateFormat('HH:mm:ss').format(turkeyTime);
+        final sensorId = reading['sensor_id'] as String? ?? '';
+        final type = reading['type'] as String? ?? '';
+        final value = reading['value']?.toString() ?? '';
+        
+        buffer.writeln('$date,$time,$sensorId,$type,$value');
+      } catch (e) {
+        // Hatalı veriyi atla
+        continue;
+      }
+    }
+    
+    return buffer.toString();
+  }
+
+  /// Verileri grafik için optimize eder - çok fazla nokta varsa örnekler
+  /// 24 saat için: maksimum 48 nokta (her 30 dakikada bir)
+  /// 7 gün için: maksimum 28 nokta (her 6 saatte bir)
+  List<SensorPoint> _downsampleData(List<SensorPoint> points, bool is24Hour) {
+    if (points.isEmpty) return points;
+    
+    final targetCount = is24Hour ? 48 : 28;
+    
+    // Eğer veri sayısı hedeften az ise, olduğu gibi döndür
+    if (points.length <= targetCount) return points;
+    
+    // Zaman sırasına göre sıralı olduğundan emin ol
+    final sorted = List<SensorPoint>.from(points)..sort((a, b) => a.time.compareTo(b.time));
+    
+    // İlk ve son noktayı her zaman dahil et
+    final result = <SensorPoint>[sorted.first];
+    
+    // Aralıkları hesapla
+    final step = (sorted.length - 1) / (targetCount - 1);
+    
+    for (int i = 1; i < targetCount - 1; i++) {
+      final index = (i * step).round().clamp(1, sorted.length - 2);
+      result.add(sorted[index]);
+    }
+    
+    // Son noktayı ekle (eğer ilk noktadan farklıysa)
+    if (sorted.last.time != sorted.first.time) {
+      result.add(sorted.last);
+    }
+    
+    return result;
   }
 }
 
@@ -235,47 +386,6 @@ class _SensorTab extends StatelessWidget {
                 ),
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _RangeTab extends StatelessWidget {
-  const _RangeTab({
-    required this.label,
-    required this.isActive,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool isActive;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            color: isActive ? AppColors.surface : AppColors.cardBackground,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: AppColors.border,
-            ),
-          ),
-          child: Center(
-            child: Text(
-              label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: isActive ? AppColors.textPrimary : AppColors.textSecondary,
-                fontWeight: isActive ? FontWeight.w500 : FontWeight.w400,
-              ),
-            ),
           ),
         ),
       ),
@@ -332,13 +442,7 @@ class _ChartCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(title, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w500)),
-              Text(subtitle, style: theme.textTheme.bodySmall?.copyWith(color: AppColors.textSecondary)),
-            ],
-          ),
+          Text(title, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w500)),
           const SizedBox(height: 16),
           Row(
             children: [
@@ -585,6 +689,33 @@ class _StatBadge extends StatelessWidget {
             const SizedBox(height: 4),
             Text(value, style: theme.textTheme.titleSmall?.copyWith(color: AppColors.textPrimary, fontWeight: FontWeight.w500)),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ExportReportButton extends StatelessWidget {
+  const _ExportReportButton({required this.onPressed});
+  
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      child: ElevatedButton.icon(
+        onPressed: onPressed,
+        icon: const Icon(Icons.download, size: 20),
+        label: const Text('Rapor Al (CSV)'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primary,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          elevation: 2,
         ),
       ),
     );

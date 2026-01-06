@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../core/config.dart';
 import '../../state/auth_state.dart';
-import '../widgets/glass_container.dart';
 import '../theme/app_theme.dart';
+import 'plants_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -12,33 +11,6 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  late final TextEditingController _controller;
-  late final TextEditingController _groqApiKeyController;
-  bool _notificationsCritical = true;
-  bool _notificationsWarnings = false;
-  bool _notificationsAnalysis = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(text: AppConfig.baseUrl);
-    _groqApiKeyController = TextEditingController();
-    _loadGroqApiKey();
-  }
-
-  Future<void> _loadGroqApiKey() async {
-    await AppConfig.load();
-    setState(() {
-      _groqApiKeyController.text = AppConfig.groqApiKey;
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    _groqApiKeyController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,14 +20,25 @@ class _SettingsPageState extends State<SettingsPage> {
 
     return ListView(
       physics: const BouncingScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+      padding: const EdgeInsets.all(16),
       children: [
-        Text('Ayarlar', style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 16),
+        Text(
+          'Ayarlar',
+          style: theme.textTheme.titleLarge?.copyWith(
+            fontWeight: FontWeight.w500,
+          ),
+        ),
         const SizedBox(height: 16),
         // Kullanıcı Bilgileri
         if (currentUser != null)
-          GlassContainer(
+          Container(
             padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: AppColors.cardBackground,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppColors.border),
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -65,20 +48,19 @@ class _SettingsPageState extends State<SettingsPage> {
                       height: 48,
                       width: 48,
                       decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        gradient: LinearGradient(
-                          colors: [
-                            AppColors.cyan,
-                            AppColors.cyan.withOpacity(0.7),
-                          ],
+                        borderRadius: BorderRadius.circular(16),
+                        color: AppColors.primary.withOpacity(0.15),
+                        border: Border.all(
+                          color: AppColors.primary.withOpacity(0.8),
+                          width: 1,
                         ),
                       ),
                       child: Center(
                         child: Text(
                           (currentUser['username'] as String? ?? 'U')[0].toUpperCase(),
                           style: theme.textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: Colors.black,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.primary,
                           ),
                         ),
                       ),
@@ -94,13 +76,14 @@ class _SettingsPageState extends State<SettingsPage> {
                             'Kullanıcı',
                             style: theme.textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.w600,
+                              color: AppColors.textPrimary,
                             ),
                           ),
                           const SizedBox(height: 4),
                           Text(
                             currentUser['email'] as String? ?? '',
                             style: theme.textTheme.bodySmall?.copyWith(
-                              color: Colors.white70,
+                              color: AppColors.textSecondary,
                             ),
                           ),
                         ],
@@ -114,13 +97,22 @@ class _SettingsPageState extends State<SettingsPage> {
                     final confirm = await showDialog<bool>(
                       context: context,
                       builder: (context) => AlertDialog(
-                        backgroundColor: AppColors.background,
-                        title: const Text('Çıkış Yap'),
-                        content: const Text('Çıkış yapmak istediğinize emin misiniz?'),
+                        backgroundColor: AppColors.cardBackground,
+                        title: Text(
+                          'Çıkış Yap',
+                          style: TextStyle(color: AppColors.textPrimary),
+                        ),
+                        content: Text(
+                          'Çıkış yapmak istediğinize emin misiniz?',
+                          style: TextStyle(color: AppColors.textSecondary),
+                        ),
                         actions: [
                           TextButton(
                             onPressed: () => Navigator.pop(context, false),
-                            child: const Text('İptal'),
+                            child: Text(
+                              'İptal',
+                              style: TextStyle(color: AppColors.textSecondary),
+                            ),
                           ),
                           TextButton(
                             onPressed: () => Navigator.pop(context, true),
@@ -136,83 +128,82 @@ class _SettingsPageState extends State<SettingsPage> {
                       await authState.logout();
                     }
                   },
-                  icon: const Icon(Icons.logout),
+                  icon: const Icon(Icons.logout, size: 18),
                   label: const Text('Çıkış Yap'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppColors.danger,
                     side: BorderSide(color: AppColors.danger.withOpacity(0.5)),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 ),
               ],
             ),
           ),
         if (currentUser != null) const SizedBox(height: 16),
-        GlassContainer(
+        // Geçmiş Butonu
+        Container(
           padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: AppColors.cardBackground,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppColors.border),
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('API Sunucu Adresi', style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60)),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _controller,
-                decoration: const InputDecoration(hintText: 'http://127.0.0.1:8000'),
-              ),
-              const SizedBox(height: 14),
-              Align(
-                alignment: Alignment.centerRight,
-                child: ElevatedButton(
-                  onPressed: () async {
-                    await AppConfig.setBaseUrl(_controller.text.trim());
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('API adresi güncellendi')),
-                    );
-                  },
-                  child: const Text('Kaydet'),
+              Text(
+                'Geçmiş',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
                 ),
-              )
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Silinen bitkilerinizi görüntüleyin',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: () {
+                  showModalBottomSheet(
+                    context: context,
+                    isScrollControlled: true,
+                    backgroundColor: Colors.transparent,
+                    builder: (context) => Container(
+                      height: MediaQuery.of(context).size.height * 0.95,
+                      decoration: BoxDecoration(
+                        color: AppColors.background,
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(20),
+                        ),
+                      ),
+                      child: const PlantsPage(showHistory: true),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.history, size: 18),
+                label: const Text('Geçmişi Görüntüle'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  side: BorderSide(color: AppColors.primary.withOpacity(0.5)),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
         const SizedBox(height: 16),
-        GlassContainer(
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Bildirimler', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 12),
-              _buildToggle(
-                label: 'Kritik uyarılar',
-                value: _notificationsCritical,
-                onChanged: (v) => setState(() => _notificationsCritical = v),
-              ),
-              _buildToggle(
-                label: 'Uyarı seviyesi',
-                value: _notificationsWarnings,
-                onChanged: (v) => setState(() => _notificationsWarnings = v),
-              ),
-              _buildToggle(
-                label: 'Analiz sonuçları',
-                value: _notificationsAnalysis,
-                onChanged: (v) => setState(() => _notificationsAnalysis = v),
-              ),
-            ],
-          ),
-        ),
       ],
     );
   }
 
-  Widget _buildToggle({required String label, required bool value, required ValueChanged<bool> onChanged}) {
-    return SwitchListTile.adaptive(
-      contentPadding: EdgeInsets.zero,
-      title: Text(label),
-      value: value,
-      onChanged: onChanged,
-      activeColor: AppColors.cyan,
-      activeTrackColor: AppColors.cyan.withOpacity(0.3),
-    );
-  }
 }

@@ -16,6 +16,9 @@ const Map<String, String> _plantTypeTranslations = {
   'Grape': 'Üzüm',
   'Peach': 'Şeftali',
   'Pepper': 'Biber',
+  'Pepper,_bell': 'Biber',
+  'Pepper, bell': 'Biber',
+  'bell_pepper': 'Biber',
   'Potato': 'Patates',
   'Strawberry': 'Çilek',
   'Tomato': 'Domates',
@@ -26,6 +29,29 @@ const Map<String, String> _plantTypeTranslations = {
   'Orange': 'Portakal',
   'Citrus': 'Turunçgil',
 };
+
+// Bitki türü normalize fonksiyonu
+String _normalizePlantType(String rawType) {
+  // Virgül ve alt çizgi ile ayrılmış formatları normalize et
+  var normalized = rawType.trim();
+  
+  // "Pepper,_bell" veya "Pepper, bell" -> "Pepper"
+  if (normalized.toLowerCase().contains('pepper')) {
+    if (normalized.contains(',') || normalized.contains('_')) {
+      normalized = 'Pepper';
+    }
+  }
+  
+  // "Corn_(maize)" -> "Corn"
+  if (normalized.contains('(')) {
+    normalized = normalized.split('(')[0].trim();
+  }
+  
+  // Alt çizgileri temizle
+  normalized = normalized.replaceAll(RegExp(r'_+$'), '').trim();
+  
+  return normalized;
+}
 
 // PlantVillage dataset hastalık çevirileri (sadece hastalıklar, healthy değil)
 const Map<String, String> _plantVillageDiseaseTranslations = {
@@ -761,11 +787,8 @@ class _PlantScanPageState extends State<PlantScanPage> {
         final parts = rawClassName.split('___');
         var rawPlantType = parts[0];
         
-        // Plant type'ı normalize et: "Corn_(maize)" -> "Corn"
-        if (rawPlantType.contains('(')) {
-          rawPlantType = rawPlantType.split('(')[0].trim();
-        }
-        rawPlantType = rawPlantType.replaceAll(RegExp(r'_+$'), '').trim();
+        // Plant type'ı normalize et: "Corn_(maize)" -> "Corn", "Pepper,_bell" -> "Pepper"
+        rawPlantType = _normalizePlantType(rawPlantType);
         
         final rawDiseaseOrStatus = parts.length > 1 ? parts[1] : '';
         var normalizedDisease = rawDiseaseOrStatus.replaceAll(RegExp(r'_+$'), '').trim();
@@ -781,11 +804,8 @@ class _PlantScanPageState extends State<PlantScanPage> {
         final parts = rawDisease.split('___');
         var rawPlantType = parts[0];
         
-        // Plant type'ı normalize et: "Corn_(maize)" -> "Corn"
-        if (rawPlantType.contains('(')) {
-          rawPlantType = rawPlantType.split('(')[0].trim();
-        }
-        rawPlantType = rawPlantType.replaceAll(RegExp(r'_+$'), '').trim();
+        // Plant type'ı normalize et: "Corn_(maize)" -> "Corn", "Pepper,_bell" -> "Pepper"
+        rawPlantType = _normalizePlantType(rawPlantType);
         
         final rawDiseaseOrStatus = parts.length > 1 ? parts[1] : '';
         var normalizedDisease = rawDiseaseOrStatus.replaceAll(RegExp(r'_+$'), '').trim();
@@ -1067,13 +1087,26 @@ class _PlantScanPageState extends State<PlantScanPage> {
     }
     
     // Plant type'ı normalize et: "Corn_(maize)" -> "corn", "Mısır" -> "mısır", "Yaban Mersini" -> "yaban_mersini"
-    var plantTypeLower = plantType.toLowerCase().trim();
+    // Önce İngilizce'den Türkçe'ye çevir varsa
+    var normalizedEnglish = _normalizePlantType(plantType);
+    var plantTypeLower = normalizedEnglish.toLowerCase().trim();
+    
+    // Eğer Türkçe ise direkt kullan
+    if (_plantTypeTranslations.containsValue(plantType)) {
+      plantTypeLower = plantType.toLowerCase().trim();
+    }
+    
     if (plantTypeLower.contains('(')) {
       plantTypeLower = plantTypeLower.split('(')[0].trim();
     }
     plantTypeLower = plantTypeLower.replaceAll(RegExp(r'_+$'), '').trim();
     // Boşlukları alt çizgiye çevir: "yaban mersini" -> "yaban_mersini"
     plantTypeLower = plantTypeLower.replaceAll(' ', '_');
+    
+    // "Pepper,_bell" veya "Pepper, bell" -> "pepper"
+    if (plantTypeLower.contains('pepper')) {
+      plantTypeLower = 'pepper';
+    }
     
     // Bitki türüne göre tesis gereksinimleri
     switch (plantTypeLower) {
@@ -1243,7 +1276,15 @@ class _PlantScanPageState extends State<PlantScanPage> {
     }
     
     // Plant type'ı normalize et: "Corn_(maize)" -> "corn", "Mısır" -> "mısır", "Yaban Mersini" -> "yaban_mersini"
-    var plantTypeLower = plantType.toLowerCase().trim();
+    // Önce İngilizce'den Türkçe'ye çevir varsa
+    var normalizedEnglish = _normalizePlantType(plantType);
+    var plantTypeLower = normalizedEnglish.toLowerCase().trim();
+    
+    // Eğer Türkçe ise direkt kullan
+    if (_plantTypeTranslations.containsValue(plantType)) {
+      plantTypeLower = plantType.toLowerCase().trim();
+    }
+    
     // Parantez içindeki kısımları temizle: "corn_(maize)" -> "corn"
     if (plantTypeLower.contains('(')) {
       plantTypeLower = plantTypeLower.split('(')[0].trim();
@@ -1252,6 +1293,11 @@ class _PlantScanPageState extends State<PlantScanPage> {
     plantTypeLower = plantTypeLower.replaceAll(RegExp(r'_+$'), '').trim();
     // Boşlukları alt çizgiye çevir: "yaban mersini" -> "yaban_mersini"
     plantTypeLower = plantTypeLower.replaceAll(' ', '_');
+    
+    // "Pepper,_bell" veya "Pepper, bell" -> "pepper"
+    if (plantTypeLower.contains('pepper')) {
+      plantTypeLower = 'pepper';
+    }
     
     // Bitki türüne göre bakım bilgileri
     switch (plantTypeLower) {
@@ -1312,14 +1358,18 @@ class _PlantScanPageState extends State<PlantScanPage> {
     final parts = rawClass.split('___');
     if (parts.length < 2) return null;
     
-    // Plant type'ı normalize et: "Corn_(maize)" -> "corn", "Apple" -> "apple"
-    var plantType = parts[0].toLowerCase().trim();
-    // Parantez içindeki kısımları temizle: "corn_(maize)" -> "corn"
-    if (plantType.contains('(')) {
-      plantType = plantType.split('(')[0].trim();
-    }
+    // Plant type'ı normalize et: "Corn_(maize)" -> "corn", "Pepper,_bell" -> "pepper"
+    var rawPlantType = parts[0];
+    var normalizedEnglish = _normalizePlantType(rawPlantType);
+    var plantType = normalizedEnglish.toLowerCase().trim();
+    
     // Alt çizgileri temizle: "corn_" -> "corn"
     plantType = plantType.replaceAll(RegExp(r'_+$'), '').trim();
+    
+    // "Pepper,_bell" veya "Pepper, bell" -> "pepper"
+    if (plantType.contains('pepper')) {
+      plantType = 'pepper';
+    }
     
     var disease = parts[1].toLowerCase().trim(); // Hastalık adını da küçük harfe çevir ve trim et
     // Disease'deki son alt çizgileri temizle: "common_rust_" -> "common_rust"
@@ -1990,11 +2040,8 @@ class _PlantScanPageState extends State<PlantScanPage> {
           final parts = rawClassName.split('___');
           var rawPlantType = parts[0];
           
-          // Plant type'ı normalize et: "Corn_(maize)" -> "Corn"
-          if (rawPlantType.contains('(')) {
-            rawPlantType = rawPlantType.split('(')[0].trim();
-          }
-          rawPlantType = rawPlantType.replaceAll(RegExp(r'_+$'), '').trim();
+          // Plant type'ı normalize et: "Corn_(maize)" -> "Corn", "Pepper,_bell" -> "Pepper"
+          rawPlantType = _normalizePlantType(rawPlantType);
           
           final rawDiseaseOrStatus = parts.length > 1 ? parts[1] : '';
           var normalizedDisease = rawDiseaseOrStatus.replaceAll(RegExp(r'_+$'), '').trim();
@@ -2010,11 +2057,8 @@ class _PlantScanPageState extends State<PlantScanPage> {
           final parts = rawDisease.split('___');
           var rawPlantType = parts[0];
           
-          // Plant type'ı normalize et: "Corn_(maize)" -> "Corn"
-          if (rawPlantType.contains('(')) {
-            rawPlantType = rawPlantType.split('(')[0].trim();
-          }
-          rawPlantType = rawPlantType.replaceAll(RegExp(r'_+$'), '').trim();
+          // Plant type'ı normalize et: "Corn_(maize)" -> "Corn", "Pepper,_bell" -> "Pepper"
+          rawPlantType = _normalizePlantType(rawPlantType);
           
           final rawDiseaseOrStatus = parts.length > 1 ? parts[1] : '';
           var normalizedDisease = rawDiseaseOrStatus.replaceAll(RegExp(r'_+$'), '').trim();
