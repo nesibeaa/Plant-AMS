@@ -1,312 +1,453 @@
-# AgriSmart IoT Monitoring System 🍄
+# 🌱 Bitki Hastalık Tespiti ve IoT İzleme Sistemi
 
-Modern bir IoT sensör izleme ve kontrol sistemi. Mantar yetiştiriciliği için tasarlanmış, ancak her türlü iklim kontrol sistemine uyarlanabilir.
+Modern yapay zeka destekli bitki hastalık tespiti ve IoT sensör izleme platformu. PlantVillage veri seti üzerinde eğitilmiş derin öğrenme modelleri kullanarak bitki türü ve sağlık durumunu tespit eder.
+
+## 📋 İçindekiler
+
+- [Özellikler](#-özellikler)
+- [Proje Yapısı](#-proje-yapısı)
+- [Kurulum](#-kurulum)
+- [Kullanım](#-kullanım)
+- [Model Detayları](#-model-detayları)
+- [API Dokümantasyonu](#-api-dokümantasyonu)
+- [Geliştirme](#-geliştirme)
+- [Katkıda Bulunma](#-katkıda-bulunma)
+
+## ✨ Özellikler
+
+### 🤖 Yapay Zeka Özellikleri
+
+- **Çoklu Çıktılı Model**: Bitki türü ve sağlık durumunu aynı anda tespit eder
+- **PlantVillage Dataset**: 14 bitki türü ve 21 sağlık durumu için eğitilmiş model
+- **Yüksek Doğruluk**: 
+  - Bitki türü tespiti: %99.98
+  - Sağlık durumu tespiti: %99.69
+  - Ortalama doğruluk: %99.83
+- **Akıllı Görüntü İşleme**: Saliency detection ile bitki bölgesini otomatik bulma
+- **Güven Skoru**: Düşük güven skorlarında kullanıcıyı uyarma
+
+### 📱 Mobil Uygulama (Flutter)
+
+- **Çapraz Platform**: iOS, Android ve Web desteği
+- **Bitki Analizi**: Fotoğraf çekerek anında hastalık tespiti
+- **IoT İzleme**: Sıcaklık, nem ve CO₂ sensör verilerini görüntüleme
+- **Grafikler**: Zaman serisi grafikleri ile veri analizi
+- **Kullanıcı Kimlik Doğrulama**: Güvenli giriş ve kayıt sistemi
+- **Hava Durumu**: Open-Meteo API ile hava durumu bilgisi
+
+### 🌐 Backend API (FastAPI)
+
+- **RESTful API**: Modern ve hızlı API tasarımı
+- **Model Metrikleri**: Confusion matrix, precision, recall, F1-score
+- **Sensör Yönetimi**: IoT sensör verilerini kaydetme ve sorgulama
+- **Aktüatör Kontrolü**: Fan, ısıtıcı ve nemlendirici kontrolü
+- **Otomatik Uyarılar**: Eşik değerlerini aşan durumlarda uyarı
+
+### 📊 Veri Analizi
+
+- **Confusion Matrix**: Model performansını görselleştirme
+- **Classification Report**: Detaylı metrik raporları
+- **Test Seti Değerlendirmesi**: Model doğruluğunu ölçme
 
 ## 🏗️ Proje Yapısı
 
 ```
 aa/
-├── app/                    # Flutter mobil/web uygulaması
-├── backend/               # FastAPI Python backend
-├── tools/                 # Simülatör ve yardımcı araçlar
-├── web/                   # HTML5 dashboard
-└── app.db                 # SQLite veritabanı
+├── app/                          # Flutter mobil/web uygulaması
+│   ├── lib/                      # Dart kaynak kodları
+│   ├── android/                  # Android platform dosyaları
+│   ├── ios/                      # iOS platform dosyaları
+│   └── pubspec.yaml              # Flutter bağımlılıkları
+│
+├── backend/                      # FastAPI Python backend
+│   ├── main.py                   # Ana API dosyası
+│   ├── plant_classifier.py       # Bitki sınıflandırıcı wrapper
+│   ├── plantvillage_classifier.py # PlantVillage multi-output model
+│   ├── models/                   # Eğitilmiş model dosyaları
+│   │   └── plantvillage_multi.pt # Ana model ağırlıkları
+│   └── requirements.txt          # Python bağımlılıkları
+│
+├── ml/                           # Makine öğrenmesi araçları
+│   ├── src/                      # Eğitim scriptleri
+│   └── requirements-ml.txt       # ML bağımlılıkları
+│
+├── PlantVillage-Dataset/         # Veri seti
+│   └── raw/                      # Ham görüntüler
+│
+├── create_confusion_matrix.py     # Confusion matrix oluşturma
+├── generate_model_metrics.py      # Model metrikleri raporu
+└── README.md                     # Bu dosya
 ```
 
-## 🚀 Hızlı Başlangıç
+## 🚀 Kurulum
 
 ### Gereksinimler
-- **Python 3.12+**
-- **Flutter 3.35+** (Dart 3.9.2+)
-- **Chrome** veya **Safari**
 
-### 1️⃣ Backend'i Başlat
+- **Python 3.10+**
+- **Flutter 3.5+** (mobil uygulama için)
+- **PyTorch** (CUDA desteği opsiyonel)
+- **SQLite** (veritabanı)
+
+### 1. Backend Kurulumu
 
 ```bash
-# Python bağımlılıklarını yükle
-pip3 install fastapi uvicorn sqlmodel pydantic
+# Backend dizinine git
+cd backend
 
-# Backend'i başlat (port 8000)
-cd /Users/nesibealatas/Desktop/aa
-uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+# Python bağımlılıklarını yükle
+pip install -r requirements.txt
+
+# Model dosyasının mevcut olduğundan emin ol
+# backend/models/plantvillage_multi.pt dosyası gerekli
+```
+
+### 2. Flutter Uygulaması Kurulumu
+
+```bash
+# Flutter dizinine git
+cd app
+
+# Bağımlılıkları yükle
+flutter pub get
+
+# iOS için (macOS gerekli)
+cd ios && pod install && cd ..
+
+# Android için
+# Android Studio ile projeyi aç ve Gradle sync yap
+```
+
+### 3. Model Dosyası
+
+Model dosyası (`backend/models/plantvillage_multi.pt`) projeye dahil edilmelidir. Eğer yoksa:
+
+1. `ml/` dizinindeki eğitim scriptlerini kullanarak modeli eğitin
+2. Veya önceden eğitilmiş model dosyasını `backend/models/` dizinine ekleyin
+
+## 💻 Kullanım
+
+### Backend'i Başlatma
+
+```bash
+# Backend dizininde
+cd backend
+
+# Geliştirme modunda başlat
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
+
+# Production modunda başlat
+uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
 ```
 
 Backend başarıyla çalışıyorsa:
-```
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000
-```
+- API Dokümantasyonu: http://127.0.0.1:8000/docs
+- ReDoc: http://127.0.0.1:8000/redoc
+- Health Check: http://127.0.0.1:8000/api/v1/health
 
-### 2️⃣ (Opsiyonel) Sensör Simülatörünü Çalıştır
+### Flutter Uygulamasını Çalıştırma
 
 ```bash
-cd tools
-python3 simulate.py
-
-# Hızlı gönderim için interval ayarla
-python3 simulate.py 1.0   # 1 saniye
-python3 simulate.py 0.5   # 0.5 saniye
-```
-
-Simülatör her 3 saniyede bir sıcaklık, nem ve CO₂ verisi gönderir.
-
-### 3️⃣ Web Dashboard'u Aç
-
-**Seçenek 1: Canlı HTML Dashboard**
-```bash
-# Chrome veya Safari ile aç
-open web/index.html     # Dashboard
-open web/stats.html     # İstatistikler
-```
-
-**Seçenek 2: Flutter Web Uygulaması**
-```bash
+# Flutter dizininde
 cd app
-flutter run -d chrome   # Chrome'da çalıştır
-flutter run -d safari   # Safari'de çalıştır
+
+# Web'de çalıştır
+flutter run -d chrome
+
+# iOS simülatörde çalıştır (macOS gerekli)
+flutter run -d ios
+
+# Android emülatörde çalıştır
+flutter run -d android
 ```
 
-### 4️⃣ API Endpoints'i Test Et
+### Model Metriklerini Oluşturma
 
 ```bash
-# Health check
-curl http://127.0.0.1:8000/api/v1/health
+# Confusion matrix oluştur
+python create_confusion_matrix.py
 
-# Son okumalar
-curl http://127.0.0.1:8000/api/v1/latest
-
-# Son 100 okuma
-curl http://127.0.0.1:8000/api/v1/readings
-
-# Uyarılar
-curl http://127.0.0.1:8000/api/v1/alerts
-
-# Fan durumu
-curl http://127.0.0.1:8000/api/v1/actuator/fan
-
-# Günlük istatistikler (son 7 gün)
-curl "http://127.0.0.1:8000/api/v1/stats/series?sensor=temp&bucket=daily&days=7"
-
-# Saatlik istatistikler (son 24 saat)
-curl "http://127.0.0.1:8000/api/v1/stats/series?sensor=temp&bucket=hourly&hours=24"
+# Model metrikleri raporu oluştur
+python generate_model_metrics.py
 ```
 
-## 📊 Özellikler
+## 🤖 Model Detayları
 
-### Sensörler
-- **Sıcaklık** (`temp-1`): Hedef: 18-24°C
-- **Nem** (`hum-1`): Hedef: 85-95%
-- **CO₂** (`co2-1`): Max: 1500 ppm
+### Model Mimarisi
 
-### Otomasyon
-- **Auto Fan**: Eşik dışı değerlerde otomatik açılır
-- **Normal Streak**: 5 normal okuma sonrası otomatik kapanır
-- **Manual Override**: Kullanıcı manuel olarak fan'ı kontrol edebilir
+- **Backbone**: ResNet18
+- **Çıktılar**: 
+  - Bitki türü (14 sınıf)
+  - Sağlık durumu (21 sınıf)
+- **Görüntü Boyutu**: 224x224
+- **Normalizasyon**: ImageNet mean/std
+- **Dropout**: 0.3-0.5 (overfitting önleme)
 
-### UI
-- **Flutter App**: iOS/Android/Web için modern mobil UI
-- **HTML Dashboard**: Lightweight, Chart.js ile grafikler
-- **Canlı Akış**: Anlık veri izleme
-- **Grafikler**: Saatlik ve günlük istatistikler
+### Desteklenen Bitki Türleri
 
-## 🔧 Yapılandırma
+1. Apple (Elma)
+2. Blueberry (Yaban Mersini)
+3. Cherry (Kiraz)
+4. Corn (Mısır)
+5. Grape (Üzüm)
+6. Orange (Turunçgil)
+7. Peach (Şeftali)
+8. Pepper (Biber)
+9. Potato (Patates)
+10. Raspberry (Ahududu)
+11. Soybean (Soya)
+12. Squash (Kabak)
+13. Strawberry (Çilek)
+14. Tomato (Domates)
 
-### Eşik Değerleri Değiştirme
-```python
-# backend/main.py
-THRESHOLDS = {
-    "temp":     {"min": 18.0, "max": 24.0},
-    "humidity": {"min": 85.0, "max": 95.0},
-    "co2":      {"max": 1500.0},
+### Sağlık Durumları
+
+- **Healthy**: Sağlıklı
+- **Bacterial Spot**: Bakteriyel leke
+- **Early Blight**: Erken yanıklık
+- **Late Blight**: Geç yanıklık
+- **Leaf Mold**: Yaprak küfü
+- **Septoria Leaf Spot**: Septoria yaprak lekesi
+- **Spider Mites**: Kırmızı örümcek
+- **Target Spot**: Hedef leke
+- **Yellow Leaf Curl Virus**: Sarı yaprak kıvırcık virüsü
+- **Mosaic Virus**: Mozaik virüsü
+- Ve daha fazlası...
+
+### Model Performansı
+
+| Metrik | Bitki Türü | Sağlık Durumu | Ortalama |
+|--------|------------|---------------|----------|
+| **Accuracy** | 99.98% | 99.69% | 99.83% |
+| **Precision** | ~0.999 | ~0.997 | ~0.998 |
+| **Recall** | ~0.999 | ~0.997 | ~0.998 |
+| **F1-Score** | ~0.999 | ~0.997 | ~0.998 |
+
+## 📡 API Dokümantasyonu
+
+### Kimlik Doğrulama
+
+```bash
+# Kullanıcı kaydı
+POST /api/v1/auth/register
+{
+  "email": "user@example.com",
+  "username": "username",
+  "password": "password123",
+  "full_name": "Full Name"
+}
+
+# Giriş
+POST /api/v1/auth/login
+{
+  "username": "username",
+  "password": "password123"
+}
+
+# Mevcut kullanıcı bilgileri
+GET /api/v1/auth/me
+Authorization: Bearer <token>
+```
+
+### Bitki Analizi
+
+```bash
+# Bitki fotoğrafı analiz et
+POST /api/v1/analyze-plant
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+{
+  "image": <file>,
+  "model": "auto" | "outdoor" | "plantvillage"
+}
+
+# Yanıt örneği
+{
+  "status": "Model Tahmini",
+  "disease": "Tomato___Tomato_Bacterial_spot",
+  "disease_display": "Tomato • Bacterial Spot",
+  "confidence_score": 0.95,
+  "health_score": 0.2,
+  "health_label": "Riskli",
+  "recommendations": [
+    "Hastalık ilerlememesi için etkilenen yaprakları budayın...",
+    "..."
+  ],
+  "analysis": {
+    "model": "plantvillage",
+    "plant": {
+      "name": "Tomato",
+      "confidence": 0.98
+    },
+    "health": {
+      "status": "Bacterial_spot",
+      "confidence": 0.92
+    }
+  }
 }
 ```
 
-### API URL'i Değiştirme (Flutter)
-Uygulama içinde **Ayarlar** sekmesinden API URL'i değiştirebilirsiniz.
+### Model Metrikleri
 
-## 📱 Mobil Uygulama (Flutter)
-
-### Ana Sayfa
-- Sıcaklık, Nem, CO₂ göstergeleri
-- Renk kodlu durum rozetleri
-
-### Grafik Sayfası
-- 24 saatlik zaman serisi grafikleri
-- Her sensör için ayrı grafikler
-
-### Kontrol Sayfası
-- Fan, Isıtıcı, Nemlendirici kontrolü
-
-### Ayarlar Sayfası
-- API URL yapılandırması
-- Ayarlar kalıcı olarak kaydedilir
-
-## 🌐 Web Dashboard
-
-### Dashboard (`index.html`)
-- Canlı KPIs
-- Üç ayrı grafik (temp/humidity/co2)
-- Fan kontrolü
-- Canlı veri akışı
-- Uyarılar tablosu
-- Otomatik yenileme (10 saniye)
-
-### İstatistikler (`stats.html`)
-- Günlük ortalamalar (son 7 gün)
-- Saatlik ortalamalar (son 24 saat)
-- Fan geçmişi
-
-## 🗄️ Veritabanı
-
-### Tablolar
-- **reading**: Tüm sensör okumaları
-- **alert**: Uyarılar ve bilgilendirmeler
-- **fan_event**: Fan açma/kapama olayları
-
-### Veritabanı Görüntüleme
 ```bash
-# VS Code SQLite extension kullan
-# veya SQLite CLI ile
-sqlite3 app.db
+# Model performans metriklerini al
+GET /api/v1/model-metrics
+Authorization: Bearer <token>
 
-.tables
-SELECT * FROM reading ORDER BY ts DESC LIMIT 10;
-SELECT * FROM alert ORDER BY ts DESC LIMIT 10;
-SELECT * FROM fan_event ORDER BY ts DESC LIMIT 10;
+# Yanıt örneği
+{
+  "test_set_size": 5265,
+  "accuracy": {
+    "plant": 0.9998,
+    "health": 0.9969,
+    "average": 0.9983
+  },
+  "confusion_matrices": {
+    "plant": {
+      "matrix": [[...], [...]],
+      "class_names": ["Apple", "Blueberry", ...],
+      "shape": [14, 14]
+    },
+    "health": {
+      "matrix": [[...], [...]],
+      "class_names": ["Healthy", "Bacterial_spot", ...],
+      "shape": [21, 21]
+    }
+  },
+  "classification_report": {
+    "plant": {
+      "precision": 0.999,
+      "recall": 0.999,
+      "f1_score": 0.999
+    },
+    "health": {
+      "precision": 0.997,
+      "recall": 0.997,
+      "f1_score": 0.997
+    }
+  }
+}
 ```
+
+### IoT Sensörleri
+
+```bash
+# Sensör verisi gönder
+POST /api/v1/ingest
+{
+  "sensor_id": "temp-1",
+  "type": "temp",
+  "value": 22.5,
+  "ts": "2024-01-15T14:30:00Z"
+}
+
+# Son okumaları al
+GET /api/v1/latest
+
+# Okuma geçmişi
+GET /api/v1/readings?sensor_id=temp-1&limit=100
+
+# İstatistikler
+GET /api/v1/stats/series?sensor=temp&bucket=daily&days=7
+```
+
+### Hava Durumu
+
+```bash
+# Hava durumu bilgisi
+GET /api/v1/weather?city=Istanbul&country_code=TR
+
+# Koordinat ile
+GET /api/v1/weather?lat=41.0082&lon=28.9784
+```
+
+## 🔧 Geliştirme
+
+### Ortam Değişkenleri
+
+Backend için `.env` dosyası oluşturun:
+
+```bash
+# backend/.env
+SECRET_KEY=your-secret-key-here
+```
+
+### Test
+
+```bash
+# Backend testleri
+cd backend
+pytest
+
+# Flutter testleri
+cd app
+flutter test
+```
+
+### Model Eğitimi
+
+Model eğitimi için `ml/` dizinindeki scriptleri kullanın:
+
+```bash
+cd ml
+pip install -r requirements-ml.txt
+python src/train.py
+```
+
+## 📊 Veri Seti
+
+Bu proje [PlantVillage Dataset](https://github.com/spMohanty/PlantVillage-Dataset) kullanmaktadır:
+
+- **Toplam Görüntü**: ~52,000+
+- **Bitki Türleri**: 14
+- **Sağlık Durumları**: 21
+- **Format**: RGB renkli görüntüler
+- **Çözünürlük**: Değişken (224x224'e normalize edilir)
 
 ## 🐛 Sorun Giderme
 
-### Backend başlamıyor
-```bash
-# Port kontrolü
-lsof -i :8000
+### Model yüklenmiyor
 
-# Process'i durdur
-pkill -f uvicorn
-```
+- `backend/models/plantvillage_multi.pt` dosyasının mevcut olduğundan emin olun
+- Model dosyasının doğru formatta olduğunu kontrol edin
 
-### Flutter bağımlılıkları kurulamıyor
+### API hatası
+
+- Backend'in çalıştığından emin olun: `curl http://127.0.0.1:8000/api/v1/health`
+- CORS ayarlarını kontrol edin
+- Kimlik doğrulama token'ının geçerli olduğundan emin olun
+
+### Flutter bağımlılıkları
+
 ```bash
 cd app
 flutter clean
 flutter pub get
 ```
 
-### Veri görünmüyor
-1. Simülatörün çalıştığından emin olun
-2. Backend health check yapın
-3. Veritabanında veri olup olmadığını kontrol edin
+## 📝 Lisans
 
-### CORS hatası (web)
-Backend zaten CORS'u etkinleştirmiş durumda. Değilse:
-```python
-# backend/main.py
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
+Bu proje eğitim ve araştırma amaçlı geliştirilmiştir.
 
-## 📚 API Dokümantasyonu
+## 👥 Katkıda Bulunma
 
-Backend çalışırken Swagger UI:
-```
-http://127.0.0.1:8000/docs
-```
-
-ReDoc:
-```
-http://127.0.0.1:8000/redoc
-```
-
-## 🎯 Kullanım Senaryoları
-
-### Senaryo 1: İlk Test
-```bash
-# Terminal 1: Backend
-uvicorn backend.main:app --reload
-
-# Terminal 2: Simülatör
-python3 tools/simulate.py
-
-# Terminal 3: Web Dashboard
-open web/index.html
-```
-
-### Senaryo 2: Flutter App
-```bash
-# Terminal 1: Backend
-uvicorn backend.main:app --reload
-
-# Terminal 2: Flutter
-cd app && flutter run -d chrome
-```
-
-### Senaryo 3: Gerçek Sensörler
-Backend'e POST isteği gönderin:
-```bash
-curl -X POST http://127.0.0.1:8000/api/v1/ingest \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sensor_id": "temp-1",
-    "type": "temp",
-    "value": 22.5,
-    "ts": "2024-01-15T14:30:00Z"
-  }'
-```
-
-## 📝 Geliştirme Notları
-
-- **Mock Mode**: Flutter uygulamasında backend bağlantısını test etmek için `MOCK_MODE = true` kullanın
-- **Timezone**: Tüm timestamp'ler UTC formatında saklanır
-- **Cache**: Web arayüzünde cache kontrolü `no-store` ile yapılır
-- **Database**: SQLite dosya bazlı, taşınabilir
-
-## 🔒 Güvenlik Notları
-
-- Üretimde CORS'u kısıtlayın (`allow_origins=["*"]` yerine)
-- API anahtarı/authentication ekleyin
-- HTTPS kullanın
-- Veritabanı yedekleme stratejisi oluşturun
-
-## 📦 Dağıtım
-
-### Backend
-```bash
-# Production için
-uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 4
-```
-
-### Flutter Web
-```bash
-cd app
-flutter build web
-# Çıktı: app/build/web/
-```
-
-## 🤝 Katkıda Bulunma
-
-1. Fork edin
-2. Branch oluşturun (`git checkout -b feature/YeniOzellik`)
-3. Commit edin (`git commit -am 'Yeni özellik ekle'`)
-4. Push edin (`git push origin feature/YeniOzellik`)
-5. Pull Request açın
-
-## 📄 Lisans
-
-Bu proje eğitim amaçlı geliştirilmiştir.
-
-## 👤 Yazar
-
-AgriSmart IoT Team
+1. Bu repository'yi fork edin
+2. Feature branch oluşturun (`git checkout -b feature/YeniOzellik`)
+3. Değişikliklerinizi commit edin (`git commit -am 'Yeni özellik eklendi'`)
+4. Branch'inizi push edin (`git push origin feature/YeniOzellik`)
+5. Pull Request oluşturun
 
 ## 🙏 Teşekkürler
 
-- FastAPI ekibi
-- Flutter ekibi
-- Chart.js
+- [PlantVillage Dataset](https://github.com/spMohanty/PlantVillage-Dataset) - Veri seti
+- [FastAPI](https://fastapi.tiangolo.com/) - Modern web framework
+- [Flutter](https://flutter.dev/) - Çapraz platform framework
+- [PyTorch](https://pytorch.org/) - Derin öğrenme framework
+- [Open-Meteo](https://open-meteo.com/) - Ücretsiz hava durumu API
 
+## 📧 İletişim
+
+Sorularınız veya önerileriniz için issue açabilirsiniz.
+
+---
+
+⭐ Bu projeyi beğendiyseniz yıldız vermeyi unutmayın!
